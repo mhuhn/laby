@@ -1,5 +1,5 @@
 :root {
-  --bar: #ecd9b6;          /* = theme-color = Manifest-Farben = html-Hintergrund */
+  --bar: #c99560;          /* = theme-color = Manifest-Farben = html-Hintergrund (Farbe der äußeren Holzleiste) */
   --bar-h: 54px;
   --ink: #3a2614;
   --ink-soft: #6e5135;
@@ -44,47 +44,41 @@ body {
   background: var(--bar);
   overflow: hidden;
 }
-#btnRotate { background: transparent; color: var(--walnut-dark); }
 
-/* ---------- Kopfleiste: fest, voll breit, einfarbig deckend ---------- */
-#bar {
-  position: fixed;
-  top: 0; left: 0; right: 0;
-  height: calc(var(--bar-h) + env(safe-area-inset-top));
-  padding: env(safe-area-inset-top) max(14px, env(safe-area-inset-right)) 0 max(14px, env(safe-area-inset-left));
-  background: var(--bar);
-  border-bottom: 1px solid #d8c09a;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  z-index: 20;
+/* ---------- Spielanzeige (schwebt über dem Brett, keine Titelzeile) ---------- */
+#hud {
+  position: absolute; top: 0; left: 0; right: 0;
+  z-index: 4;
+  pointer-events: none;
 }
-.bar-title {
-  font-weight: 800;
-  font-size: 22px;
-  letter-spacing: .3px;
-  flex: 1;
-  white-space: nowrap;
-}
-.bar-btn {
-  width: 40px; height: 40px;
-  border: 0; border-radius: 12px;
-  background: var(--walnut);
-  color: var(--bar);
-  fill: currentColor;
+.hud-btn {
+  position: absolute; top: 6px; left: 6px;
+  width: 38px; height: 38px;
+  border: 0; border-radius: 50%;
+  background: rgba(58, 38, 20, .72);
+  color: #f6ead3; fill: currentColor;
   display: grid; place-items: center;
+  pointer-events: auto;
   touch-action: manipulation;
 }
-.bar-btn:active { transform: scale(.94); }
-.bar-stats { display: flex; gap: 18px; font-size: 19px; }
-.stat { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
-.stat b { font-variant-numeric: tabular-nums; font-weight: 750; min-width: 1.2em; }
+.hud-btn:active { transform: scale(.92); }
+.hud-stats {
+  position: absolute; top: 6px; right: 6px;
+  display: flex; align-items: center; gap: 12px;
+  height: 30px; padding: 0 12px;
+  border-radius: 99px;
+  background: rgba(58, 38, 20, .72);
+  color: #f6ead3;
+  font: 700 14.5px var(--font);
+}
+.hud-stats .stat { display: inline-flex; align-items: center; gap: 4px; }
+.hud-stats b { font-variant-numeric: tabular-nums; font-weight: 700; }
+.btn.rotate { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin-top: 10px; }
 
 /* ---------- Spielfläche ---------- */
 #stage {
   position: absolute;
-  top: calc(var(--bar-h) + env(safe-area-inset-top));
-  left: 0; right: 0; bottom: 0;
+  inset: 0;
   background:
     radial-gradient(120% 90% at 50% 40%, #46301f 0%, var(--table) 70%, #24170f 100%);
   overflow: hidden;

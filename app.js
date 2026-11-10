@@ -4,12 +4,13 @@
 
 // ============================================================ Konstanten
 const LEVEL_COUNT = 20;
-const W = 1200, H = 860, FRAME = 44;            // Spielbrett in Welt-Einheiten (Querformat)
+const H = 860;                                   // Brett-Höhe in Welt-Einheiten; Breite folgt dem Bildschirm
 const BALL_R = 14, HOLE_R = 20, GOAL_R = 23, WALL_T = 12;
 const G_BASE = 7200;                             // Beschleunigung bei 90° Neigung
 const SENS = [0.62, 1, 1.5];
 const ROLL_RES = 70;                             // Rollwiderstand (Einheiten/s²)
 const RESTITUTION = 0.32;
+const FALL_T = 0.16;                             // Dauer des Verschwindens im Loch (s)
 const MAX_TILT = Math.sin(28 * Math.PI / 180);
 const STORE_KEY = 'laby.v1';
 
@@ -52,12 +53,14 @@ const DIRS = [ // dc, dr, Bit, Gegenbit
   [0, -1, N, S], [1, 0, E, Wd], [0, 1, S, N], [-1, 0, Wd, E],
 ];
 
-function buildLevel(n) {
+function buildLevel(n, aspect = 1.43) {
+  const W = Math.round(H * clamp(aspect, 1.2, 2.1));
   const [cols, rows, holeTarget] = levelConfig(n);
   const rng = mulberry32(n * 7919 + 1301);
-  const cell = Math.min((W - 2 * FRAME) / cols, (H - 2 * FRAME) / rows);
-  const mw = cols * cell, mh = rows * cell;
-  const ox = (W - mw) / 2, oy = (H - mh) / 2;
+  // Die äußere Holzleiste liegt direkt am Bildschirmrand; Felder dürfen leicht rechteckig sein
+  const ox = WALL_T / 2, oy = WALL_T / 2;
+  const mw = W - WALL_T, mh = H - WALL_T;
+  const cw = mw / cols, ch = mh / rows, cell = Math.min(cw, ch);
   const total = cols * rows;
   const open = new Uint8Array(total);
   const id = (c, r) => r * cols + c;
@@ -107,14 +110,14 @@ function buildLevel(n) {
   const pathIndex = new Int32Array(total).fill(-1);
   path.forEach((c, k) => { pathIndex[c] = k; });
 
-  const cellX = (i) => ox + (i % cols) * cell;
-  const cellY = (i) => oy + Math.floor(i / cols) * cell;
+  const cellX = (i) => ox + (i % cols) * cw;
+  const cellY = (i) => oy + Math.floor(i / cols) * ch;
   const dirBetween = (p, q) => { const [pc, pr] = cr(p), [qc, qr] = cr(q); return [qc - pc, qr - pr]; };
 
   // --- Löcher auf dem Weg
   const difficulty = 0.25 + 0.75 * (n - 1) / (LEVEL_COUNT - 1);
   const holes = [];
-  const waypoints = path.map((c) => ({ x: cellX(c) + cell / 2, y: cellY(c) + cell / 2 }));
+  const waypoints = path.map((c) => ({ x: cellX(c) + cw / 2, y: cellY(c) + ch / 2 }));
   const minOff = WALL_T / 2 + HOLE_R + 4;
   const candidates = shuffle(path.slice(2, -2).map((c) => pathIndex[c]), rng);
   const chosen = new Set(candidates.slice(0, holeTarget));
@@ -127,30 +130,31 @@ function buildLevel(n) {
     if (straight) {
       if (!chosen.has(k)) continue;
       const side = rng() < 0.5 ? -1 : 1;
-      const maxOff = Math.min(cell - WALL_T / 2 - (2 * BALL_R + 16) - HOLE_R, cell / 2);
+      const P = ix !== 0 ? ch : cw, A = ix !== 0 ? cw : ch; // quer / längs zum Gang
+      const maxOff = Math.min(P - WALL_T / 2 - (2 * BALL_R + 16) - HOLE_R, P / 2);
       const off = minOff + rng() * difficulty * Math.max(0, maxOff - minOff);
-      const along = (rng() - 0.5) * cell * 0.25;
-      const gapMid = (off + HOLE_R + cell - WALL_T / 2) / 2; // Mitte der freien Gasse
+      const along = (rng() - 0.5) * A * 0.25;
+      const gapMid = (off + HOLE_R + P - WALL_T / 2) / 2; // Mitte der freien Gasse
       if (ix !== 0) { // waagerechter Gang
-        const hy = side < 0 ? y0 + off : y0 + cell - off;
-        holes.push({ x: x0 + cell / 2 + along, y: hy, r: HOLE_R });
-        waypoints[k].y = side < 0 ? y0 + gapMid : y0 + cell - gapMid;
+        const hy = side < 0 ? y0 + off : y0 + ch - off;
+        holes.push({ x: x0 + cw / 2 + along, y: hy, r: HOLE_R });
+        waypoints[k].y = side < 0 ? y0 + gapMid : y0 + ch - gapMid;
       } else {
-        const hx = side < 0 ? x0 + off : x0 + cell - off;
-        holes.push({ x: hx, y: y0 + cell / 2 + along, r: HOLE_R });
-        waypoints[k].x = side < 0 ? x0 + gapMid : x0 + cell - gapMid;
+        const hx = side < 0 ? x0 + off : x0 + cw - off;
+        holes.push({ x: hx, y: y0 + ch / 2 + along, r: HOLE_R });
+        waypoints[k].x = side < 0 ? x0 + gapMid : x0 + cw - gapMid;
       }
     } else {
       // Kurve: Innenecke = Seite, von der wir kamen, + Seite, in die es weitergeht
       const sx = ix !== 0 ? -ix : ex;   // waagerechte Öffnung
       const sy = iy !== 0 ? -iy : ey;   // senkrechte Öffnung
-      waypoints[k].x += sx * cell * 0.12;
-      waypoints[k].y += sy * cell * 0.12;
+      waypoints[k].x += sx * cw * 0.12;
+      waypoints[k].y += sy * ch * 0.12;
       if (!chosen.has(k)) continue;
       const off = minOff + rng() * difficulty * Math.min(18, cell * 0.12);
       // Loch in die Außenecke – dort, wo der Schwung hinträgt
-      const hx = sx > 0 ? x0 + off : x0 + cell - off;
-      const hy = sy > 0 ? y0 + off : y0 + cell - off;
+      const hx = sx > 0 ? x0 + off : x0 + cw - off;
+      const hy = sy > 0 ? y0 + off : y0 + ch - off;
       holes.push({ x: hx, y: hy, r: HOLE_R });
     }
   }
@@ -164,7 +168,7 @@ function buildLevel(n) {
       if (cnt === 1) deadEnds.push(i);
     }
     shuffle(deadEnds, rng).slice(0, Math.floor(holeTarget / 3)).forEach((i) => {
-      holes.push({ x: cellX(i) + cell / 2, y: cellY(i) + cell / 2, r: HOLE_R });
+      holes.push({ x: cellX(i) + cw / 2, y: cellY(i) + ch / 2, r: HOLE_R });
     });
   }
 
@@ -177,7 +181,7 @@ function buildLevel(n) {
       const closed = c < cols && (r === 0 || r === rows || !(open[id(c, r)] & N));
       if (closed && run < 0) run = c;
       if (!closed && run >= 0) {
-        walls.push({ x: ox + run * cell - T / 2, y: oy + r * cell - T / 2, w: (c - run) * cell + T, h: T });
+        walls.push({ x: ox + run * cw - T / 2, y: oy + r * ch - T / 2, w: (c - run) * cw + T, h: T });
         run = -1;
       }
     }
@@ -188,14 +192,14 @@ function buildLevel(n) {
       const closed = r < rows && (c === 0 || c === cols || !(open[id(c, r)] & Wd));
       if (closed && run < 0) run = r;
       if (!closed && run >= 0) {
-        walls.push({ x: ox + c * cell - T / 2, y: oy + run * cell - T / 2, w: T, h: (r - run) * cell + T });
+        walls.push({ x: ox + c * cw - T / 2, y: oy + run * ch - T / 2, w: T, h: (r - run) * ch + T });
         run = -1;
       }
     }
   }
 
   // --- Zwischenziele
-  const step = path.length <= 14 ? 3 : 4;
+  const step = path.length <= 14 ? 6 : 8; // halb so viele Zwischenziele
   const checkpoints = [];
   for (let k = step; k < path.length - 1; k += step) {
     checkpoints.push({ k, x: waypoints[k].x, y: waypoints[k].y, label: checkpoints.length + 1 });
@@ -203,7 +207,7 @@ function buildLevel(n) {
 
   const startP = waypoints[0], goalP = waypoints[path.length - 1];
   return {
-    n, cols, rows, cell, ox, oy, mw, mh, W, H,
+    n, cols, rows, cell, cw, ch, ox, oy, mw, mh, W, H, aspect,
     walls, holes, waypoints, checkpoints,
     start: { x: startP.x, y: startP.y },
     goal: { x: goalP.x, y: goalP.y, r: GOAL_R },
@@ -211,24 +215,10 @@ function buildLevel(n) {
   };
 }
 
-// Querformat-Level für Hochformat spiegeln (x ↔ y)
-function transposeLevel(L) {
-  const p = (o) => ({ ...o, x: o.y, y: o.x });
-  return {
-    ...L, W: L.H, H: L.W, ox: L.oy, oy: L.ox, mw: L.mh, mh: L.mw, cols: L.rows, rows: L.cols,
-    walls: L.walls.map((w) => ({ x: w.y, y: w.x, w: w.h, h: w.w })),
-    holes: L.holes.map(p), waypoints: L.waypoints.map(p), checkpoints: L.checkpoints.map(p),
-    start: p(L.start), goal: p(L.goal), transposed: true,
-  };
-}
 function pathIndexAt(L, x, y) {
-  let bx = x, by = y;
-  if (L.transposed) { bx = y; by = x; }
-  const baseOx = L.transposed ? L.oy : L.ox, baseOy = L.transposed ? L.ox : L.oy;
-  const baseCols = L.transposed ? L.rows : L.cols, baseRows = L.transposed ? L.cols : L.rows;
-  const c = Math.floor((bx - baseOx) / L.cell), r = Math.floor((by - baseOy) / L.cell);
-  if (c < 0 || r < 0 || c >= baseCols || r >= baseRows) return -1;
-  return L.pathIndex[r * baseCols + c];
+  const c = Math.floor((x - L.ox) / L.cw), r = Math.floor((y - L.oy) / L.ch);
+  if (c < 0 || r < 0 || c >= L.cols || r >= L.rows) return -1;
+  return L.pathIndex[r * L.cols + c];
 }
 
 // ============================================================ Ton
@@ -311,7 +301,9 @@ const Sound = (() => {
   function checkpoint() { if (!ctx) return; const t = ctx.currentTime; tone(t, 880, 0.12, 0.1); tone(t + 0.07, 1320, 0.14, 0.08); }
   function win() {
     if (!ctx) return; const t = ctx.currentTime;
-    [523, 659, 784, 1047].forEach((f, i) => tone(t + 0.2 + i * 0.11, f, 0.35, 0.16, 'triangle'));
+    // zwei leise, weiche Glockentöne statt Fanfare
+    tone(t + 0.12, 659, 0.9, 0.045, 'sine'); tone(t + 0.12, 1318, 0.5, 0.012, 'sine');
+    tone(t + 0.30, 880, 1.1, 0.04, 'sine'); tone(t + 0.30, 1760, 0.6, 0.01, 'sine');
   }
   function tick(hi) { if (!ctx) return; tone(ctx.currentTime, hi ? 1046 : 660, 0.12, 0.13, 'triangle'); }
   return { init, setEnabled, roll, hit, drop, checkpoint, win, tick };
@@ -447,29 +439,12 @@ function renderStatic() {
   c.clearRect(0, 0, staticCanvas.width, staticCanvas.height);
   c.setTransform(view.scale * view.dpr, 0, 0, view.scale * view.dpr, view.ox * view.dpr, view.oy * view.dpr);
   const rng = mulberry32(L.n * 31 + 7);
-  const vertGrain = !!L.transposed;
 
-  // Schatten des Bretts auf dem Tisch
-  c.save(); c.shadowColor = 'rgba(0,0,0,.55)'; c.shadowBlur = 40; c.shadowOffsetY = 14;
-  c.fillStyle = '#8f5f35'; c.fillRect(0, 0, L.W, L.H); c.restore();
-
-  // Rahmen
-  const fg = c.createLinearGradient(0, 0, L.W, L.H);
-  fg.addColorStop(0, '#a46e3e'); fg.addColorStop(1, '#8a5a30');
-  c.fillStyle = fg; c.fillRect(0, 0, L.W, L.H);
-  woodGrain(c, rng, 0, 0, L.W, L.H, { lines: 70, alpha: 0.16, dark: '70,38,14', vertical: vertGrain });
-  c.strokeStyle = 'rgba(255,230,190,.35)'; c.lineWidth = 2; c.strokeRect(1, 1, L.W - 2, L.H - 2);
-
-  // Boden (Birke)
-  const fx = L.ox, fy = L.oy, fw = L.mw, fh = L.mh;
-  const bg = c.createLinearGradient(fx, fy, fx + fw, fy + fh);
+  // Boden (Birke) über das ganze Brett
+  const bg = c.createLinearGradient(0, 0, L.W, L.H);
   bg.addColorStop(0, '#ead0a2'); bg.addColorStop(1, '#dcbc8a');
-  c.fillStyle = bg; c.fillRect(fx, fy, fw, fh);
-  woodGrain(c, rng, fx, fy, fw, fh, { lines: 110, alpha: 0.09, dark: '120,78,34', vertical: vertGrain });
-  // Innenkante: Schatten vom Rahmen
-  c.save(); c.beginPath(); c.rect(fx, fy, fw, fh); c.clip();
-  c.shadowColor = 'rgba(40,20,5,.45)'; c.shadowBlur = 14; c.shadowOffsetX = 5; c.shadowOffsetY = 6;
-  c.strokeStyle = '#000'; c.lineWidth = 24; c.strokeRect(fx - 12, fy - 12, fw + 24, fh + 24); c.restore();
+  c.fillStyle = bg; c.fillRect(0, 0, L.W, L.H);
+  woodGrain(c, rng, 0, 0, L.W, L.H, { lines: 120, alpha: 0.09, dark: '120,78,34', vertical: false });
 
   // Leitlinie
   const wp = L.waypoints;
@@ -483,12 +458,12 @@ function renderStatic() {
   // Start
   c.beginPath(); c.arc(L.start.x, L.start.y, BALL_R + 7, 0, Math.PI * 2);
   c.strokeStyle = 'rgba(28,18,10,.82)'; c.lineWidth = 3; c.stroke();
-  if (L.cell >= 120) label(c, 'START', L.start.x, L.start.y + BALL_R + 22, 15, 'rgba(28,18,10,.8)');
+  if (L.cell >= 150) label(c, 'START', L.start.x, L.start.y + BALL_R + 22, 15, 'rgba(28,18,10,.8)');
 
   // Löcher + Ziel
   L.holes.forEach((h) => drawHole(c, h, false));
   drawHole(c, L.goal, true);
-  if (L.cell >= 120) label(c, 'ZIEL', L.goal.x, L.goal.y + GOAL_R + 30, 15, '#b3261e');
+  if (L.cell >= 150) label(c, 'ZIEL', L.goal.x, L.goal.y + GOAL_R + 30, 15, '#b3261e');
 
   // Zwischenziele (Nummern)
   L.checkpoints.forEach((p) => {
@@ -556,8 +531,8 @@ function render() {
   const b = game.ball;
   if (b.state === 'gone') return;
   if (b.state === 'falling') {
-    const t = clamp(b.fallT / 0.42, 0, 1), e = t * t;
-    drawBall(ctx, b.x + (b.fx - b.x) * e, b.y + (b.fy - b.y) * e, 1 - 0.42 * e, 0.85 * e);
+    const t = clamp(b.fallT / FALL_T, 0, 1), e = t * (2 - t);
+    drawBall(ctx, b.x + (b.fx - b.x) * e, b.y + (b.fy - b.y) * e, 1 - 0.5 * e, 0.95 * e);
   } else if (b.state === 'held' && Math.floor(b.heldT * 8) % 2 === 1) {
     ctx.globalAlpha = 0.45; drawBall(ctx, b.x, b.y, 1, 0); ctx.globalAlpha = 1;
   } else {
@@ -593,6 +568,10 @@ function autoRotate() {
   if (sx < -0.5) setRotation(90); else if (sx > 0.5) setRotation(-90);
 }
 
+function stageAspect() {
+  const st = $('#stage');
+  return st.offsetWidth / Math.max(1, st.offsetHeight);
+}
 function layout() {
   applyRotation();
   const stageEl = $('#stage');
@@ -601,17 +580,14 @@ function layout() {
   view.dpr = dpr; view.w = rect.width; view.h = rect.height;
   canvas.width = Math.round(rect.width * dpr); canvas.height = Math.round(rect.height * dpr);
   if (!game.base) return;
-  const portrait = rect.height > rect.width * 1.02;
-  const had = !!game.level;
-  if (!had || !!game.level.transposed !== portrait) {
-    game.level = portrait ? transposeLevel(game.base) : game.base;
-    if (had) { // Kugel mitdrehen
-      const b = game.ball;
-      [b.x, b.y] = [b.y, b.x]; [b.vx, b.vy] = [b.vy, b.vx]; [b.fx, b.fy] = [b.fy, b.fx];
-    }
+  // Brett an das Seitenverhältnis anpassen (außer mitten im Spiel)
+  const aspect = rect.width / Math.max(1, rect.height);
+  if (Math.abs(aspect - game.base.aspect) > 0.01 && (game.mode === 'menu' || game.mode === 'won')) {
+    game.base = buildLevel(game.base.n, aspect);
+    if (game.mode === 'menu') placeBall(game.base.start);
   }
-  const L = game.level, pad = 10;
-  view.scale = Math.min((rect.width - pad * 2) / L.W, (rect.height - pad * 2) / L.H);
+  const L = game.level = game.base;
+  view.scale = Math.min(rect.width / L.W, rect.height / L.H);
   view.ox = (rect.width - L.W * view.scale) / 2;
   view.oy = (rect.height - L.H * view.scale) / 2;
   renderStatic();
@@ -629,11 +605,11 @@ const game = {
 function startLevel(n) {
   Sound.init();
   game.n = n;
-  game.base = buildLevel(n);
-  game.level = null;
+  game.base = buildLevel(n, stageAspect());
+  game.level = game.base;
   game.time = 0; game.falls = 0; game.cpReached = 0;
   showScreen(null);
-  $('#btnPause').hidden = false; $('#barStats').hidden = false; $('#btnRotate').hidden = true;
+  $('#hud').hidden = false; $('#btnRotate').hidden = true;
   $('#barTitle').textContent = `Level ${n}`;
   layout();
   placeBall(game.level.start);
@@ -688,7 +664,7 @@ function win() {
   $('#winBest').textContent = fmt(store.best[n]);
   $('#winRecord').hidden = !(record && prevBest);
   $('#btnNext').hidden = n >= LEVEL_COUNT;
-  setTimeout(() => { if (game.mode === 'won') showScreen('#scrWin'); }, 650);
+  setTimeout(() => { if (game.mode === 'won') showScreen('#scrWin'); }, 450);
 }
 
 function physics(dt) {
@@ -709,11 +685,11 @@ function physics(dt) {
       const ho = i < 0 ? L.goal : L.holes[i];
       const dx = ho.x - b.x, dy = ho.y - b.y, d = Math.hypot(dx, dy);
       if (d < ho.r) {
-        if (d < ho.r - BALL_R * 0.5) {
+        if (d < ho.r - BALL_R * 0.15) {
           b.state = 'falling'; b.fallT = 0; b.fx = ho.x; b.fy = ho.y; b.toGoal = i < 0;
           Sound.roll(0); if (i >= 0) Sound.drop(); return;
         }
-        const pull = 4200 * (1 - d / ho.r) + 900;
+        const pull = 6500 * (1 - d / ho.r) + 1600;
         b.vx += (dx / d) * pull * h; b.vy += (dy / d) * pull * h;
       }
     }
@@ -789,9 +765,9 @@ function frame(now) {
     if (b.state === 'roll') physics(dt);
     else if (b.state === 'falling') {
       b.fallT += dt;
-      if (b.fallT > 0.42) {
+      if (b.fallT > FALL_T) {
         if (b.toGoal) { b.state = 'gone'; win(); }
-        else { b.state = 'gone'; b.fallT = 0; game.falls++; updateHud(); setTimeout(() => { if (game.mode === 'play' || game.mode === 'paused') respawn(); }, 350); }
+        else { b.state = 'gone'; b.fallT = 0; game.falls++; updateHud(); setTimeout(() => { if (game.mode === 'play' || game.mode === 'paused') respawn(); }, 250); }
       }
     } else if (b.state === 'held') {
       b.heldT += dt; if (b.heldT > 0.55) b.state = 'roll';
@@ -824,7 +800,7 @@ function showScreen(sel) {
 }
 function goMenu() {
   game.mode = 'menu'; Sound.roll(0); releaseWake();
-  $('#btnPause').hidden = true; $('#barStats').hidden = true; $('#barTitle').textContent = 'Laby';
+  $('#hud').hidden = true;
   $('#btnRotate').hidden = !view.rot;
   $('#countdown').hidden = true;
   showScreen('#scrMenu');
@@ -890,8 +866,10 @@ async function requestWake() {
 function releaseWake() { try { if (wakeLock) wakeLock.release(); } catch (e) { /* egal */ } wakeLock = null; }
 
 // Hintergrund im Menü: das nächste Level als Vorschau
-game.base = buildLevel(Math.min(store.unlocked, LEVEL_COUNT));
+applyRotation();
+game.base = buildLevel(Math.min(store.unlocked, LEVEL_COUNT), stageAspect());
 game.n = game.base.n;
+game.level = game.base;
 layout();
 placeBall(game.level.start);
 showScreen('#scrMenu');

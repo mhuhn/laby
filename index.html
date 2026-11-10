@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Laby</title>
 <meta name="description" content="Kugellabyrinth aus Holz – steuere die Metallkugel durch Neigen des iPads.">
-<meta name="theme-color" content="#ecd9b6">
+<meta name="theme-color" content="#c99560">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -18,22 +18,20 @@
 <body>
 <div id="app">
 
-<header id="bar">
-  <button id="btnPause" class="bar-btn" aria-label="Pause" hidden>
-    <svg viewBox="0 0 24 24" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/></svg>
-  </button>
-  <div id="barTitle" class="bar-title">Laby</div>
-  <button id="btnRotate" class="bar-btn" aria-label="Bildschirm drehen" hidden>
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.7"/><path d="M20 3.5v5.2h-5.2"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.3"/><path d="M4 20.5v-5.2h5.2"/></svg>
-  </button>
-  <div id="barStats" class="bar-stats" hidden>
-    <span class="stat"><svg viewBox="0 0 24 24" width="17" height="17"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 9v4.5l3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M9.5 2.5h5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><b id="statTime">0:00.0</b></span>
-    <span class="stat"><svg viewBox="0 0 24 24" width="17" height="17"><circle cx="12" cy="12" r="8.5" fill="currentColor" opacity=".9"/><circle cx="12" cy="12" r="4" fill="#ecd9b6"/></svg><b id="statFalls">0</b></span>
-  </div>
-</header>
-
 <main id="stage">
   <canvas id="board"></canvas>
+
+  <!-- Spielanzeige direkt über dem Brett -->
+  <div id="hud" hidden>
+    <button id="btnPause" class="hud-btn" aria-label="Pause">
+      <svg viewBox="0 0 24 24" width="18" height="18"><rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/></svg>
+    </button>
+    <div id="barStats" class="hud-stats">
+      <span id="barTitle">Level 1</span>
+      <span class="stat"><svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 9v4.5l3 2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg><b id="statTime">0:00.0</b></span>
+      <span class="stat"><svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="8.5" fill="currentColor"/><circle cx="12" cy="12" r="4" fill="#3a2614"/></svg><b id="statFalls">0</b></span>
+    </div>
+  </div>
 
   <div id="countdown" class="countdown" hidden>
     <div id="cdNum" class="cd-num">3</div>
@@ -66,7 +64,11 @@
           <button id="btnLevels" class="btn">Level wählen</button>
           <button id="btnSettings" class="btn">Einstellungen</button>
         </div>
-        <p class="hint">Laby läuft immer im Querformat – halte das iPad an den schmalen Seiten. Steht die Schrift auf dem Kopf, tippe oben rechts auf das Drehen-Symbol.</p>
+        <button id="btnRotate" class="btn rotate" hidden>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.7"/><path d="M20 3.5v5.2h-5.2"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.3"/><path d="M4 20.5v-5.2h5.2"/></svg>
+          Schrift steht Kopf? Drehen
+        </button>
+        <p class="hint">Laby läuft immer im Querformat – halte das iPad an den schmalen Seiten.</p>
       </div>
     </div>
   </section>
