@@ -17,7 +17,7 @@ const $ = (s) => document.querySelector(s);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 // ============================================================ Speicher
-const DEFAULTS = { unlocked: 1, best: {}, settings: { sens: 1, sound: true, checkpoints: true } };
+const DEFAULTS = { unlocked: 1, best: {}, settings: { sens: 1, sound: true, checkpoints: true, rot: 90 } };
 function loadStore() {
   try {
     const s = JSON.parse(localStorage.getItem(STORE_KEY));
@@ -232,39 +232,63 @@ function pathIndexAt(L, x, y) {
 }
 
 // ============================================================ Ton
+// Rollgeräusch = leises, tiefes Grummeln des Holzbretts + feines Knistern der Maserung,
+// beides an die Geschwindigkeit gekoppelt. Kein breitbandiges Rauschen (klingt nach Meer).
 const Sound = (() => {
-  let ctx = null, master, rollGain, rollFilter, noiseBuf, lastHit = 0;
+  let ctx = null, master, rumbleGain, rumbleLP, flutter, flutterDepth, white, lastHit = 0, grainAcc = 0;
   function init() {
     if (ctx) { if (ctx.state !== 'running') ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     ctx = new AC();
     master = ctx.createGain(); master.gain.value = store.settings.sound ? 1 : 0; master.connect(ctx.destination);
-    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-    const d = noiseBuf.getChannelData(0); let last = 0;
-    for (let i = 0; i < d.length; i++) { const w = Math.random() * 2 - 1; last = (last + 0.04 * w) / 1.04; d[i] = last * 3.2; }
-    const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
-    rollFilter = ctx.createBiquadFilter(); rollFilter.type = 'bandpass'; rollFilter.frequency.value = 220; rollFilter.Q.value = 0.9;
-    rollGain = ctx.createGain(); rollGain.gain.value = 0;
-    src.connect(rollFilter); rollFilter.connect(rollGain); rollGain.connect(master); src.start();
+    white = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const d = white.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+
+    // Grummeln: Rauschen -> Tiefpass -> Holzresonanz -> Lautstärke (mit leichtem Flattern der Kugeldrehung)
+    const src = ctx.createBufferSource(); src.buffer = white; src.loop = true;
+    rumbleLP = ctx.createBiquadFilter(); rumbleLP.type = 'lowpass'; rumbleLP.frequency.value = 160; rumbleLP.Q.value = 0.5;
+    const lp2 = ctx.createBiquadFilter(); lp2.type = 'lowpass'; lp2.frequency.value = 420; lp2.Q.value = 0.5;
+    const body = ctx.createBiquadFilter(); body.type = 'peaking'; body.frequency.value = 190; body.Q.value = 4; body.gain.value = 9;
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 60;
+    rumbleGain = ctx.createGain(); rumbleGain.gain.value = 0;
+    const flutterGain = ctx.createGain(); flutterGain.gain.value = 1;
+    flutter = ctx.createOscillator(); flutter.frequency.value = 3;
+    flutterDepth = ctx.createGain(); flutterDepth.gain.value = 0.25;
+    flutter.connect(flutterDepth); flutterDepth.connect(flutterGain.gain); flutter.start();
+    src.connect(rumbleLP); rumbleLP.connect(lp2); lp2.connect(body); body.connect(hp); hp.connect(flutterGain);
+    flutterGain.connect(rumbleGain); rumbleGain.connect(master); src.start();
   }
   function setEnabled(on) { if (master) master.gain.value = on ? 1 : 0; }
-  function roll(speed) {
+  function roll(speed, dt = 0) {
     if (!ctx) return;
     const t = ctx.currentTime;
-    rollGain.gain.setTargetAtTime(Math.min(speed / 1400, 1) * 0.55, t, 0.06);
-    rollFilter.frequency.setTargetAtTime(140 + Math.min(speed, 1600) * 0.35, t, 0.08);
+    const v = Math.min(speed / 1600, 1);
+    rumbleGain.gain.setTargetAtTime(speed < 8 ? 0 : 0.22 * Math.pow(v, 1.3), t, 0.04);
+    rumbleLP.frequency.setTargetAtTime(110 + v * 260, t, 0.05);
+    flutter.frequency.setTargetAtTime(Math.max(0.5, speed / (2 * Math.PI * BALL_R)), t, 0.1);
+    // Knistern: ein winziges Klicken etwa alle 22 Einheiten Weg (Holzfasern)
+    if (dt > 0 && speed > 15) {
+      grainAcc += speed * dt / 22;
+      let n = 0;
+      while (grainAcc >= 1 && n < 6) {
+        grainAcc -= 1; n++;
+        const at = t + Math.random() * dt;
+        burst(at, 0.006 + Math.random() * 0.006, 2200 + Math.random() * 2600, 2.5, (0.006 + 0.022 * v) * (0.4 + Math.random()), 'bandpass');
+      }
+    } else grainAcc = 0;
   }
   function burst(t, dur, freq, q, gain, type = 'bandpass') {
-    const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.playbackRate.value = 1.6;
+    const s = ctx.createBufferSource(); s.buffer = white;
     const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
     const g = ctx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    s.connect(f); f.connect(g); g.connect(master); s.start(t, Math.random()); s.stop(t + dur + 0.02);
+    s.connect(f); f.connect(g); g.connect(master); s.start(t, Math.random() * 1.5); s.stop(t + dur + 0.02);
   }
   function tone(t, freq, dur, gain, type = 'sine') {
     const o = ctx.createOscillator(); o.type = type; o.frequency.value = freq;
     const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.02);
   }
   function hit(impact) {
@@ -272,20 +296,24 @@ const Sound = (() => {
     const now = ctx.currentTime;
     if (now - lastHit < 0.035) return; lastHit = now;
     const v = Math.min(impact / 1100, 1);
-    burst(now, 0.05, 1800, 1.2, 0.5 * v);          // Holz-Klack
-    tone(now, 3100 + Math.random() * 300, 0.06, 0.08 * v, 'triangle'); // Metall
+    tone(now, 520 + Math.random() * 60, 0.05, 0.35 * v, 'triangle');   // Holzleiste
+    burst(now, 0.025, 1500, 1.5, 0.3 * v);                                // Klack
+    tone(now, 3300 + Math.random() * 400, 0.04, 0.05 * v, 'sine');        // Stahl
   }
   function drop() {
     if (!ctx) return; const t = ctx.currentTime;
-    tone(t, 140, 0.22, 0.5); burst(t, 0.12, 500, 0.8, 0.5);
-    [0.13, 0.22, 0.28, 0.32].forEach((dt, i) => burst(t + dt, 0.04, 1400, 1.5, 0.25 / (i + 1)));
+    tone(t, 120, 0.18, 0.45); burst(t, 0.06, 700, 1, 0.3);
+    [0.12, 0.2, 0.26, 0.3].forEach((dt, i) => {
+      tone(t + dt, 480 - i * 30, 0.04, 0.22 / (i + 1), 'triangle');
+      burst(t + dt, 0.02, 1500, 1.5, 0.15 / (i + 1));
+    });
   }
-  function checkpoint() { if (!ctx) return; const t = ctx.currentTime; tone(t, 880, 0.12, 0.12); tone(t + 0.07, 1320, 0.14, 0.1); }
+  function checkpoint() { if (!ctx) return; const t = ctx.currentTime; tone(t, 880, 0.12, 0.1); tone(t + 0.07, 1320, 0.14, 0.08); }
   function win() {
     if (!ctx) return; const t = ctx.currentTime;
-    [523, 659, 784, 1047].forEach((f, i) => tone(t + 0.2 + i * 0.11, f, 0.35, 0.18, 'triangle'));
+    [523, 659, 784, 1047].forEach((f, i) => tone(t + 0.2 + i * 0.11, f, 0.35, 0.16, 'triangle'));
   }
-  function tick(hi) { if (!ctx) return; tone(ctx.currentTime, hi ? 1046 : 660, 0.12, 0.15, 'triangle'); }
+  function tick(hi) { if (!ctx) return; tone(ctx.currentTime, hi ? 1046 : 660, 0.12, 0.13, 'triangle'); }
   return { init, setEnabled, roll, hit, drop, checkpoint, win, tick };
 })();
 
@@ -335,7 +363,7 @@ function readTilt() {
     const b = basis || makeBasis([0, 0, -1]);
     const dx = dot(sensor.g, b.ex);          // Gerät: nach rechts
     const dy = -dot(sensor.g, b.ey);         // Gerät: nach unten (Hochformat)
-    const a = screenAngle() * Math.PI / 180;
+    const a = (screenAngle() + view.rot) * Math.PI / 180;
     const ca = Math.round(Math.cos(a)), sa = Math.round(Math.sin(a));
     tx = dx * ca + dy * sa;
     ty = -dx * sa + dy * ca;
@@ -367,7 +395,7 @@ const canvas = $('#board');
 const ctx = canvas.getContext('2d');
 const staticCanvas = document.createElement('canvas');
 const sctx = staticCanvas.getContext('2d');
-const view = { scale: 1, ox: 0, oy: 0, dpr: 1, w: 0, h: 0 };
+const view = { scale: 1, ox: 0, oy: 0, dpr: 1, w: 0, h: 0, rot: 0 };
 
 function woodGrain(c, rng, x, y, w, h, opts) {
   const { lines, alpha, dark, vertical } = opts;
@@ -537,8 +565,38 @@ function render() {
   }
 }
 
+// Immer Querformat: steht der Bildschirm hochkant (z. B. Ausrichtungssperre), wird die ganze App um 90° gedreht
+const appEl = $('#app');
+function applyRotation() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const portrait = vh > vw;
+  const rot = portrait ? (store.settings.rot === -90 ? -90 : 90) : 0;
+  view.rot = rot;
+  if (!rot) {
+    appEl.style.width = '100%'; appEl.style.height = '100%'; appEl.style.transform = '';
+  } else {
+    appEl.style.width = vh + 'px'; appEl.style.height = vw + 'px';
+    appEl.style.transform = rot === 90 ? `translateX(${vw}px) rotate(90deg)` : `translateY(${vh}px) rotate(-90deg)`;
+  }
+  $('#btnRotate').hidden = !rot || $('#scrMenu').hidden;
+}
+function setRotation(r) {
+  if (store.settings.rot === r) return;
+  store.settings.rot = r; save(); layout();
+}
+// im Menü automatisch die richtige Seite nach oben drehen (im Spiel nie, sonst kippt das Bild beim Neigen)
+function autoRotate() {
+  if (!view.rot || game.mode !== 'menu' || !sensor.ok) return;
+  const a = screenAngle() * Math.PI / 180, ca = Math.round(Math.cos(a)), sa = Math.round(Math.sin(a));
+  const gx = sensor.g[0], gyDown = -sensor.g[1];
+  const sx = gx * ca + gyDown * sa; // Schwerkraft nach rechts auf dem (hochkanten) Bildschirm
+  if (sx < -0.5) setRotation(90); else if (sx > 0.5) setRotation(-90);
+}
+
 function layout() {
-  const rect = $('#stage').getBoundingClientRect();
+  applyRotation();
+  const stageEl = $('#stage');
+  const rect = { width: stageEl.offsetWidth, height: stageEl.offsetHeight };
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   view.dpr = dpr; view.w = rect.width; view.h = rect.height;
   canvas.width = Math.round(rect.width * dpr); canvas.height = Math.round(rect.height * dpr);
@@ -575,7 +633,7 @@ function startLevel(n) {
   game.level = null;
   game.time = 0; game.falls = 0; game.cpReached = 0;
   showScreen(null);
-  $('#btnPause').hidden = false; $('#barStats').hidden = false;
+  $('#btnPause').hidden = false; $('#barStats').hidden = false; $('#btnRotate').hidden = true;
   $('#barTitle').textContent = `Level ${n}`;
   layout();
   placeBall(game.level.start);
@@ -691,7 +749,7 @@ function physics(dt) {
   b.x = clamp(b.x, L.ox + BALL_R, L.ox + L.mw - BALL_R);
   b.y = clamp(b.y, L.oy + BALL_R, L.oy + L.mh - BALL_R);
   Sound.hit(impact);
-  Sound.roll(Math.hypot(b.vx, b.vy));
+  Sound.roll(Math.hypot(b.vx, b.vy), dt);
 
   if (store.settings.checkpoints) {
     const k = pathIndexAt(L, b.x, b.y);
@@ -707,6 +765,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min((now - (lastT || now)) / 1000, 1 / 30);
   lastT = now;
+  autoRotate();
   if (!game.level) return;
   readTilt();
   const b = game.ball;
@@ -766,6 +825,7 @@ function showScreen(sel) {
 function goMenu() {
   game.mode = 'menu'; Sound.roll(0); releaseWake();
   $('#btnPause').hidden = true; $('#barStats').hidden = true; $('#barTitle').textContent = 'Laby';
+  $('#btnRotate').hidden = !view.rot;
   $('#countdown').hidden = true;
   showScreen('#scrMenu');
 }
@@ -797,6 +857,7 @@ const refreshers = [
   bindSeg('#segSound', () => (store.settings.sound ? 1 : 0), (v) => { store.settings.sound = v === '1'; Sound.init(); Sound.setEnabled(store.settings.sound); }),
 ];
 
+$('#btnRotate').addEventListener('click', () => setRotation(view.rot === 90 ? -90 : 90));
 $('#btnPlay').addEventListener('click', () => { requestMotion(); startLevel(Math.min(store.unlocked, LEVEL_COUNT)); });
 $('#btnLevels').addEventListener('click', () => openLevels('#scrMenu'));
 $('#btnSettings').addEventListener('click', () => { refreshers.forEach((r) => r()); showScreen('#scrSettings'); });
@@ -841,5 +902,5 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 }
 
 // für Tests
-window.__laby = { game, buildLevel, tilt, sensor, keys, startLevel };
+window.__laby = { game, buildLevel, tilt, sensor, keys, startLevel, view };
 })();
