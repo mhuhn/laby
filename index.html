@@ -29,7 +29,7 @@
     <div id="barStats" class="hud-stats">
       <span id="barTitle">Level 1</span>
       <span class="stat"><svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M12 9v4.5l3 2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg><b id="statTime">0:00.0</b></span>
-      <span class="stat"><svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="8.5" fill="currentColor"/><circle cx="12" cy="12" r="4" fill="#3a2614"/></svg><b id="statFalls">0</b></span>
+      <span class="stat"><svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="8.5" fill="currentColor"/><circle cx="12" cy="12" r="4" fill="#3a2614"/></svg><b id="statFalls">0/2</b></span>
     </div>
   </div>
 
@@ -149,6 +149,19 @@
         <div class="row">
           <button id="btnAgain" class="btn">Nochmal</button>
           <button id="btnWinLevels" class="btn">Level wählen</button>
+        </div>
+      </div>
+    </div>
+  </section>
+  <!-- Verloren -->
+  <section id="scrLost" class="screen dim" hidden>
+    <div class="scroll">
+      <div class="card">
+        <h2>Leider verloren</h2>
+        <p class="lost-text">Die Kugel ist zweimal ins Loch gefallen.</p>
+        <button id="btnLostAgain" class="btn primary big">Nochmal</button>
+        <div class="row">
+          <button id="btnLostLevels" class="btn">Level wählen</button>
         </div>
       </div>
     </div>

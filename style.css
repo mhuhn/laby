@@ -225,3 +225,5 @@ body {
   text-align: center;
   z-index: 6;
 }
+
+.lost-text { color: var(--ink-soft); font-size: 16px; margin: -6px 0 18px; }

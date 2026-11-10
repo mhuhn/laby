@@ -10,6 +10,7 @@ const G_BASE = 7200;                             // Beschleunigung bei 90° Neig
 const SENS = [0.62, 1, 1.5];
 const ROLL_RES = 70;                             // Rollwiderstand (Einheiten/s²)
 const RESTITUTION = 0.32;
+const MAX_FALLS = 2;                             // beim zweiten Loch ist das Level verloren
 const FALL_T = 0.16;                             // Dauer des Verschwindens im Loch (s)
 const MAX_TILT = Math.sin(28 * Math.PI / 180);
 const STORE_KEY = 'laby.v1';
@@ -45,8 +46,10 @@ function shuffle(arr, rng) {
 
 // ============================================================ Levelgenerator
 // [Spalten, Zeilen, Löcher auf dem Weg]
-const TABLE = [[4, 3, 1], [5, 3, 2], [5, 4, 4], [6, 4, 6], [7, 5, 8], [8, 5, 10], [8, 6, 13], [9, 6, 16], [10, 7, 19]];
-function levelConfig(n) { return n <= TABLE.length ? TABLE[n - 1] : [10, 7, 19 + (n - TABLE.length) * 2]; }
+// Die Bahnen werden schnell schmaler: ab Level 9 das engste Raster (Felder ca. 100 Einheiten)
+const TABLE = [[5, 3, 1], [6, 4, 3], [7, 5, 6], [8, 5, 9], [9, 6, 12], [10, 7, 16], [11, 7, 20], [11, 8, 24], [12, 8, 27]];
+function levelConfig(n) { return n <= TABLE.length ? TABLE[n - 1] : [12, 8, 27 + (n - TABLE.length) * 3]; }
+const MIN_CELL = 100;
 
 const N = 1, E = 2, S = 4, Wd = 8;
 const DIRS = [ // dc, dr, Bit, Gegenbit
@@ -55,7 +58,8 @@ const DIRS = [ // dc, dr, Bit, Gegenbit
 
 function buildLevel(n, aspect = 1.43) {
   const W = Math.round(H * clamp(aspect, 1.2, 2.1));
-  const [cols, rows, holeTarget] = levelConfig(n);
+  const cfg = levelConfig(n), holeTarget = cfg[2];
+  const cols = Math.min(cfg[0], Math.floor((W - WALL_T) / MIN_CELL)), rows = Math.min(cfg[1], Math.floor((H - WALL_T) / MIN_CELL));
   const rng = mulberry32(n * 7919 + 1301);
   // Die äußere Holzleiste liegt direkt am Bildschirmrand; Felder dürfen leicht rechteckig sein
   const ox = WALL_T / 2, oy = WALL_T / 2;
@@ -199,7 +203,7 @@ function buildLevel(n, aspect = 1.43) {
   }
 
   // --- Zwischenziele
-  const step = path.length <= 14 ? 6 : 8; // halb so viele Zwischenziele
+  const step = path.length <= 14 ? 10 : 13; // wenige Zwischenziele
   const checkpoints = [];
   for (let k = step; k < path.length - 1; k += step) {
     checkpoints.push({ k, x: waypoints[k].x, y: waypoints[k].y, label: checkpoints.length + 1 });
@@ -305,8 +309,9 @@ const Sound = (() => {
     tone(t + 0.12, 659, 0.9, 0.045, 'sine'); tone(t + 0.12, 1318, 0.5, 0.012, 'sine');
     tone(t + 0.30, 880, 1.1, 0.04, 'sine'); tone(t + 0.30, 1760, 0.6, 0.01, 'sine');
   }
+  function lost() { if (!ctx) return; const t = ctx.currentTime + 0.1; tone(t, 330, 0.5, 0.05); tone(t + 0.18, 247, 0.7, 0.045); }
   function tick(hi) { if (!ctx) return; tone(ctx.currentTime, hi ? 1046 : 660, 0.12, 0.13, 'triangle'); }
-  return { init, setEnabled, roll, hit, drop, checkpoint, win, tick };
+  return { init, setEnabled, roll, hit, drop, checkpoint, win, lost, tick };
 })();
 
 // ============================================================ Neigungssensor
@@ -582,7 +587,7 @@ function layout() {
   if (!game.base) return;
   // Brett an das Seitenverhältnis anpassen (außer mitten im Spiel)
   const aspect = rect.width / Math.max(1, rect.height);
-  if (Math.abs(aspect - game.base.aspect) > 0.01 && (game.mode === 'menu' || game.mode === 'won')) {
+  if (Math.abs(aspect - game.base.aspect) > 0.01 && (game.mode === 'menu' || game.mode === 'won' || game.mode === 'lost')) {
     game.base = buildLevel(game.base.n, aspect);
     if (game.mode === 'menu') placeBall(game.base.start);
   }
@@ -665,6 +670,11 @@ function win() {
   $('#winRecord').hidden = !(record && prevBest);
   $('#btnNext').hidden = n >= LEVEL_COUNT;
   setTimeout(() => { if (game.mode === 'won') showScreen('#scrWin'); }, 450);
+}
+
+function lose() {
+  game.mode = 'lost'; Sound.roll(0); Sound.lost(); releaseWake();
+  setTimeout(() => { if (game.mode === 'lost') showScreen('#scrLost'); }, 450);
 }
 
 function physics(dt) {
@@ -767,7 +777,11 @@ function frame(now) {
       b.fallT += dt;
       if (b.fallT > FALL_T) {
         if (b.toGoal) { b.state = 'gone'; win(); }
-        else { b.state = 'gone'; b.fallT = 0; game.falls++; updateHud(); setTimeout(() => { if (game.mode === 'play' || game.mode === 'paused') respawn(); }, 250); }
+        else {
+          b.state = 'gone'; b.fallT = 0; game.falls++; updateHud();
+          if (game.falls >= MAX_FALLS) lose();
+          else { toast('Noch ein Versuch!', 1600); setTimeout(() => { if (game.mode === 'play' || game.mode === 'paused') respawn(); }, 250); }
+        }
       }
     } else if (b.state === 'held') {
       b.heldT += dt; if (b.heldT > 0.55) b.state = 'roll';
@@ -785,7 +799,7 @@ function fmt(t) {
 }
 function updateHud() {
   $('#statTime').textContent = fmt(game.time);
-  $('#statFalls').textContent = game.falls;
+  $('#statFalls').textContent = `${game.falls}/${MAX_FALLS}`;
 }
 let toastTimer = 0;
 function toast(msg, ms = 3000) {
@@ -793,7 +807,7 @@ function toast(msg, ms = 3000) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 
-const SCREENS = ['#scrMenu', '#scrLevels', '#scrSettings', '#scrPause', '#scrWin'];
+const SCREENS = ['#scrMenu', '#scrLevels', '#scrSettings', '#scrPause', '#scrWin', '#scrLost'];
 let backTarget = '#scrMenu';
 function showScreen(sel) {
   SCREENS.forEach((s) => { $(s).hidden = s !== sel; });
@@ -837,7 +851,7 @@ $('#btnRotate').addEventListener('click', () => setRotation(view.rot === 90 ? -9
 $('#btnPlay').addEventListener('click', () => { requestMotion(); startLevel(Math.min(store.unlocked, LEVEL_COUNT)); });
 $('#btnLevels').addEventListener('click', () => openLevels('#scrMenu'));
 $('#btnSettings').addEventListener('click', () => { refreshers.forEach((r) => r()); showScreen('#scrSettings'); });
-document.querySelectorAll('[data-back]').forEach((b) => b.addEventListener('click', () => showScreen(backTarget === '#scrPause' && game.mode === 'paused' ? '#scrPause' : backTarget === '#scrWin' ? '#scrWin' : '#scrMenu')));
+document.querySelectorAll('[data-back]').forEach((b) => b.addEventListener('click', () => showScreen(backTarget === '#scrPause' && game.mode === 'paused' ? '#scrPause' : backTarget === '#scrWin' ? '#scrWin' : backTarget === '#scrLost' ? '#scrLost' : '#scrMenu')));
 $('#btnReset').addEventListener('click', () => {
   if (!confirm('Alle Bestzeiten und freigeschalteten Level löschen?')) return;
   store.unlocked = 1; store.best = {}; save(); toast('Fortschritt gelöscht');
@@ -851,6 +865,8 @@ $('#btnPauseMenu').addEventListener('click', goMenu);
 $('#btnNext').addEventListener('click', () => { requestMotion(); startLevel(game.n + 1); });
 $('#btnAgain').addEventListener('click', () => { requestMotion(); startLevel(game.n); });
 $('#btnWinLevels').addEventListener('click', () => openLevels('#scrWin'));
+$('#btnLostAgain').addEventListener('click', () => { requestMotion(); startLevel(game.n); });
+$('#btnLostLevels').addEventListener('click', () => openLevels('#scrLost'));
 
 document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
 window.addEventListener('resize', () => setTimeout(layout, 60));
