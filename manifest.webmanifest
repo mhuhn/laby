@@ -1,0 +1,17 @@
+{
+  "name": "Laby",
+  "short_name": "Laby",
+  "description": "Kugellabyrinth aus Holz – steuere die Metallkugel durch Neigen des iPads.",
+  "lang": "de",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#ecd9b6",
+  "theme_color": "#ecd9b6",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

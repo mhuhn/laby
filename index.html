@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Laby</title>
+<meta name="description" content="Kugellabyrinth aus Holz – steuere die Metallkugel durch Neigen des iPads.">
+<meta name="theme-color" content="#ecd9b6">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Laby">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header id="bar">
+  <button id="btnPause" class="bar-btn" aria-label="Pause" hidden>
+    <svg viewBox="0 0 24 24" width="22" height="22"><rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/></svg>
+  </button>
+  <div id="barTitle" class="bar-title">Laby</div>
+  <div id="barStats" class="bar-stats" hidden>
+    <span class="stat"><svg viewBox="0 0 24 24" width="17" height="17"><circle cx="12" cy="13" r="8" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 9v4.5l3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M9.5 2.5h5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg><b id="statTime">0:00.0</b></span>
+    <span class="stat"><svg viewBox="0 0 24 24" width="17" height="17"><circle cx="12" cy="12" r="8.5" fill="currentColor" opacity=".9"/><circle cx="12" cy="12" r="4" fill="#ecd9b6"/></svg><b id="statFalls">0</b></span>
+  </div>
+</header>
+
+<main id="stage">
+  <canvas id="board"></canvas>
+
+  <div id="countdown" class="countdown" hidden>
+    <div id="cdNum" class="cd-num">3</div>
+    <div class="cd-hint">iPad ruhig halten</div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <!-- Startmenü -->
+  <section id="scrMenu" class="screen dim">
+    <div class="scroll">
+      <div class="card menu-card">
+        <svg class="logo" viewBox="0 0 262 120" aria-hidden="true">
+          <defs>
+            <radialGradient id="lgBall" cx="38%" cy="34%" r="70%">
+              <stop offset="0" stop-color="#ffffff"/><stop offset=".25" stop-color="#dfe3e8"/>
+              <stop offset=".7" stop-color="#868d96"/><stop offset="1" stop-color="#3a3f46"/>
+            </radialGradient>
+            <radialGradient id="lgHole" cx="58%" cy="62%" r="60%">
+              <stop offset="0" stop-color="#050302"/><stop offset=".75" stop-color="#150d06"/><stop offset="1" stop-color="#4a2f17"/>
+            </radialGradient>
+          </defs>
+          <text x="6" y="92" class="logo-text">Laby</text>
+          <circle cx="236" cy="78" r="17" fill="url(#lgHole)"/>
+          <circle cx="226" cy="70" r="14" fill="url(#lgBall)"/>
+        </svg>
+        <p class="tagline">Das Kugellabyrinth zum Neigen</p>
+        <button id="btnPlay" class="btn primary big">Spielen</button>
+        <div class="row">
+          <button id="btnLevels" class="btn">Level wählen</button>
+          <button id="btnSettings" class="btn">Einstellungen</button>
+        </div>
+        <p class="hint">Tipp: Schalte im Kontrollzentrum die Ausrichtungssperre ein, damit sich der Bildschirm beim Neigen nicht dreht.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Levelauswahl -->
+  <section id="scrLevels" class="screen dim" hidden>
+    <div class="scroll">
+      <div class="card wide">
+        <h2>Level wählen</h2>
+        <div id="levelGrid" class="level-grid"></div>
+        <button class="btn back" data-back>Zurück</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Einstellungen -->
+  <section id="scrSettings" class="screen dim" hidden>
+    <div class="scroll">
+      <div class="card">
+        <h2>Einstellungen</h2>
+        <div class="setting">
+          <span>Empfindlichkeit</span>
+          <div class="seg" id="segSens">
+            <button data-v="0">Sanft</button><button data-v="1">Normal</button><button data-v="2">Flink</button>
+          </div>
+        </div>
+        <div class="setting">
+          <span>Nach einem Fall</span>
+          <div class="seg" id="segCp">
+            <button data-v="1">Zwischenziel</button><button data-v="0">Zum Start</button>
+          </div>
+        </div>
+        <div class="setting">
+          <span>Ton</span>
+          <div class="seg" id="segSound">
+            <button data-v="1">An</button><button data-v="0">Aus</button>
+          </div>
+        </div>
+        <p class="hint">Zwischenziele sind die nummerierten Punkte auf der Linie. Ist „Zum Start“ gewählt, beginnt die Kugel nach jedem Loch ganz von vorn – wie beim echten Holzlabyrinth.</p>
+        <div class="row">
+          <button class="btn back" data-back>Zurück</button>
+          <button id="btnReset" class="btn danger">Fortschritt löschen</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pause -->
+  <section id="scrPause" class="screen dim" hidden>
+    <div class="scroll">
+      <div class="card">
+        <h2>Pause</h2>
+        <button id="btnResume" class="btn primary big">Weiter</button>
+        <div class="row">
+          <button id="btnRestart" class="btn">Neu starten</button>
+          <button id="btnCalib" class="btn">Neu ausrichten</button>
+        </div>
+        <div class="row">
+          <button id="btnPauseLevels" class="btn">Level wählen</button>
+          <button id="btnPauseMenu" class="btn">Menü</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Gewonnen -->
+  <section id="scrWin" class="screen dim" hidden>
+    <div class="scroll">
+      <div class="card">
+        <h2 id="winTitle">Geschafft!</h2>
+        <div class="win-stats">
+          <div><small>Zeit</small><b id="winTime">0:00.0</b></div>
+          <div><small>Löcher</small><b id="winFalls">0</b></div>
+          <div><small>Bestzeit</small><b id="winBest">–</b></div>
+        </div>
+        <p id="winRecord" class="record" hidden>Neue Bestzeit!</p>
+        <button id="btnNext" class="btn primary big">Nächstes Level</button>
+        <div class="row">
+          <button id="btnAgain" class="btn">Nochmal</button>
+          <button id="btnWinLevels" class="btn">Level wählen</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
