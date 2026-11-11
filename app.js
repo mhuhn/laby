@@ -5,7 +5,13 @@
 // ============================================================ Konstanten
 const LEVEL_COUNT = 20;
 const H = 860;                                   // Brett-Höhe in Welt-Einheiten; Breite folgt dem Bildschirm
-const BALL_R = 14, HOLE_R = 20, GOAL_R = 23, WALL_T = 12;
+const BALL_R = 14, HOLE_R = 20, WALL_T = 12;
+const LINE_W = 9;                                // Strichstärke der aufgedruckten Linie (wie beim Holzlabyrinth)
+const ARROW_L = 30, ARROW_W = 30;                // Pfeilspitze am Ziel
+const FINISH_R = 26;                             // so nah muss die Kugel an die Pfeilspitze
+const INK = 'rgba(48,40,34,.96)';                // Druckfarbe
+const FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+const CLASSIC_LEVEL = 7, CLASSIC_BAR = 26;       // nachgebautes klassisches Holzlabyrinth
 const G_BASE = 7200;                             // Beschleunigung bei 90° Neigung
 const SENS = [0.62, 1, 1.5];
 const ROLL_RES = 70;                             // Rollwiderstand (Einheiten/s²)
@@ -58,7 +64,201 @@ const DIRS = [ // dc, dr, Bit, Gegenbit
   [0, -1, N, S], [1, 0, E, Wd], [0, 1, S, N], [-1, 0, Wd, E],
 ];
 
+// Klassisches Holzlabyrinth (vom Foto vermessen). Koordinaten als Anteil der Bodenfläche (0..1):
+// vbars [x, oben, unten], hbars [links, rechts, y], Löcher [x, y], Nummern [Text, x, y], Linie ab Haken bis Pfeilfuß
+const CLASSIC = {"vbars":[[0.2876,0.0,0.0981],[0.4088,0.1154,0.2692],[0.7058,0.0,0.5625],[0.1861,0.151,0.2471],[0.5993,0.2423,0.3365],[0.2876,0.224,0.3173],[0.5015,0.249,0.374],[0.081,0.251,0.3471],[0.908,0.1548,0.6106],[0.1956,0.3558,0.599],[0.2891,0.4231,0.5154],[0.3869,0.424,0.5154],[0.6015,0.426,0.55],[0.4993,0.449,0.8885],[0.4161,0.6221,0.7702],[0.592,0.6308,0.7817],[0.3015,0.6337,0.7817],[0.708,0.6683,0.8173],[0.1036,0.6779,0.824],[0.1942,0.6808,0.8269],[0.8066,0.7663,0.9183],[0.308,0.9279,1.0],[0.4088,0.875,1.0],[0.6051,0.8654,1.0]],"hbars":[[0.3905,0.7058,0.1346],[0.7058,0.7956,0.125],[0.7058,0.7956,0.4856],[0.0,0.0533,0.1856],[0.0,0.1058,0.4894],[0.8212,0.908,0.3221],[0.8212,1.0,0.625],[0.0985,0.1956,0.5798],[0.8066,0.9168,0.899],[0.0861,0.2044,0.9221]],"holes":[[0.7599,0.037],[0.942,0.0538],[0.023,0.1],[0.6391,0.2125],[0.8266,0.25],[0.3445,0.2668],[0.2201,0.2769],[0.1223,0.3019],[0.7551,0.401],[0.3321,0.4601],[0.438,0.4803],[0.5456,0.4962],[0.8485,0.5452],[0.2339,0.6962],[0.9405,0.6962],[0.6361,0.7163],[0.354,0.7399],[0.0369,0.749],[0.8602,0.8115],[0.2412,0.8356],[0.7376,0.8558],[0.4577,0.95],[0.5467,0.9481],[0.3445,0.9567]],"labels":[["1",0.3285,0.2106],["2",0.2241,0.2038],["3",0.0854,0.1058],["4",0.1241,0.2308],["5",0.1255,0.3788],["6",0.035,0.6712],["7",0.1759,0.649],["8",0.0336,0.824],["9",0.1781,0.8558],["10",0.2285,0.9221],["11",0.3445,0.9048],["12",0.346,0.8173],["13",0.4453,0.8846],["14",0.4438,0.5529],["15",0.3321,0.5327],["15",0.346,0.6663],["16",0.227,0.5856],["17",0.2131,0.3481],["18",0.3248,0.3404],["18",0.3255,0.3952],["19",0.4336,0.3981],["20",0.5526,0.2135],["21",0.5328,0.4202],["22",0.6401,0.2942],["23",0.6518,0.6279],["24",0.5328,0.5865],["25",0.5482,0.8808],["26",0.654,0.7779],["27",0.7489,0.9212],["28",0.973,0.7615],["29",0.8474,0.7279],["30",0.7445,0.7788],["31",0.8635,0.499],["32",0.7372,0.3317],["33",0.854,0.174],["34",0.8204,0.0779],["35",0.8832,0.051],["36",0.9526,0.5644]],"line":[[0.6275,0.0521],[0.6247,0.0594],[0.6205,0.0651],[0.6147,0.0684],[0.6066,0.0703],[0.4048,0.081],[0.3648,0.0884],[0.3528,0.0919],[0.3465,0.0952],[0.3419,0.0988],[0.3377,0.1035],[0.3342,0.109],[0.3295,0.1217],[0.3242,0.1535],[0.3202,0.1685],[0.3174,0.1743],[0.3137,0.179],[0.3103,0.1813],[0.3053,0.1829],[0.2876,0.1826],[0.2697,0.1859],[0.2598,0.1864],[0.2499,0.1853],[0.2422,0.182],[0.2358,0.1756],[0.2301,0.1655],[0.2261,0.1543],[0.2185,0.1277],[0.2137,0.117],[0.21,0.1118],[0.2056,0.1077],[0.1955,0.1028],[0.1845,0.1006],[0.1719,0.0998],[0.1578,0.1007],[0.1468,0.1028],[0.1375,0.1059],[0.1288,0.1106],[0.1218,0.1162],[0.1158,0.1236],[0.1118,0.131],[0.1092,0.1392],[0.1078,0.148],[0.1066,0.1704],[0.1045,0.1866],[0.1011,0.2001],[0.0946,0.2175],[0.0916,0.2228],[0.0875,0.2268],[0.0676,0.2364],[0.0476,0.2482],[0.0394,0.2546],[0.0333,0.2617],[0.0278,0.2717],[0.0239,0.285],[0.0217,0.303],[0.0215,0.3237],[0.0234,0.3457],[0.0262,0.3596],[0.0312,0.3722],[0.0386,0.3826],[0.0455,0.3881],[0.0544,0.3924],[0.0883,0.4007],[0.1026,0.4062],[0.1147,0.4142],[0.1241,0.425],[0.1301,0.437],[0.1339,0.4522],[0.1349,0.4708],[0.1333,0.491],[0.1305,0.503],[0.1265,0.5122],[0.1208,0.5199],[0.1138,0.5253],[0.1047,0.5286],[0.0909,0.5311],[0.0683,0.5302],[0.0599,0.5309],[0.0507,0.5342],[0.0438,0.5395],[0.0376,0.5488],[0.0342,0.5602],[0.0318,0.582],[0.0315,0.6023],[0.0332,0.6185],[0.0365,0.6301],[0.0423,0.6399],[0.049,0.6458],[0.0606,0.6507],[0.0743,0.6532],[0.0827,0.653],[0.0988,0.6492],[0.1128,0.6504],[0.1203,0.6536],[0.1284,0.6592],[0.1338,0.6645],[0.1373,0.6698],[0.1415,0.6808],[0.1436,0.697],[0.1445,0.7388],[0.1445,0.7868],[0.1438,0.8038],[0.142,0.8162],[0.1387,0.8259],[0.1336,0.8343],[0.1259,0.8418],[0.1199,0.8456],[0.1122,0.8491],[0.0749,0.8605],[0.0592,0.8664],[0.0481,0.8728],[0.0396,0.8814],[0.0363,0.887],[0.0333,0.8948],[0.0315,0.9033],[0.0309,0.9121],[0.0316,0.921],[0.0339,0.9312],[0.037,0.9391],[0.0412,0.9461],[0.0476,0.9524],[0.0566,0.9563],[0.1072,0.9667],[0.1393,0.97],[0.1612,0.9697],[0.1831,0.9673],[0.2036,0.9636],[0.2495,0.9532],[0.2595,0.948],[0.2686,0.9398],[0.2831,0.9217],[0.3013,0.8936],[0.3079,0.8871],[0.3286,0.8695],[0.3432,0.86],[0.362,0.8502],[0.4275,0.8217],[0.4382,0.8142],[0.445,0.8057],[0.4478,0.7998],[0.4503,0.7916],[0.4529,0.7719],[0.4533,0.6836],[0.4528,0.6589],[0.4509,0.6407],[0.4477,0.627],[0.4428,0.6143],[0.4323,0.5932],[0.4268,0.5856],[0.421,0.5814],[0.3964,0.5715],[0.383,0.5679],[0.3676,0.5659],[0.3535,0.5653],[0.295,0.569],[0.2733,0.5689],[0.2552,0.5659],[0.2487,0.5633],[0.2427,0.5594],[0.2375,0.5538],[0.2343,0.5481],[0.2321,0.5417],[0.2305,0.5329],[0.2299,0.5159],[0.2301,0.4194],[0.2309,0.4103],[0.2325,0.4017],[0.2352,0.3935],[0.2383,0.3876],[0.2421,0.3824],[0.2476,0.3771],[0.2588,0.371],[0.2683,0.3687],[0.2796,0.3675],[0.3932,0.3621],[0.4041,0.3597],[0.414,0.3543],[0.4222,0.3453],[0.4262,0.3382],[0.4294,0.3304],[0.4326,0.3187],[0.4402,0.2786],[0.4449,0.2619],[0.4492,0.2508],[0.4547,0.2406],[0.4605,0.233],[0.4671,0.2267],[0.4756,0.2213],[0.4963,0.2133],[0.5016,0.2128],[0.5069,0.2139],[0.5132,0.2172],[0.5176,0.2213],[0.5302,0.2402],[0.5362,0.2541],[0.5396,0.2696],[0.5407,0.2844],[0.5412,0.3264],[0.543,0.3427],[0.547,0.3559],[0.553,0.3656],[0.562,0.3736],[0.5759,0.3804],[0.588,0.3834],[0.6075,0.3848],[0.6177,0.3888],[0.6259,0.3946],[0.6324,0.401],[0.637,0.4076],[0.6408,0.4169],[0.6439,0.4325],[0.6452,0.4546],[0.6457,0.5313],[0.645,0.5459],[0.6433,0.5564],[0.6405,0.5645],[0.6366,0.5718],[0.6316,0.5781],[0.626,0.5833],[0.6163,0.5891],[0.5977,0.5925],[0.5885,0.5966],[0.5635,0.614],[0.5584,0.6198],[0.5543,0.6269],[0.5515,0.6368],[0.5505,0.6497],[0.5504,0.7496],[0.5511,0.7685],[0.5528,0.779],[0.5557,0.787],[0.5599,0.794],[0.5664,0.8005],[0.5736,0.8054],[0.5812,0.809],[0.6192,0.8229],[0.6301,0.83],[0.6377,0.8376],[0.644,0.8471],[0.649,0.8579],[0.6628,0.9022],[0.6697,0.9196],[0.6738,0.9269],[0.6787,0.9336],[0.6841,0.9393],[0.6901,0.9435],[0.6966,0.9461],[0.7035,0.9472],[0.7353,0.9481],[0.9124,0.9455],[0.9223,0.9448],[0.9305,0.9432],[0.9395,0.9392],[0.9478,0.9332],[0.9554,0.9252],[0.9609,0.917],[0.9669,0.9049],[0.9721,0.8904],[0.9759,0.8752],[0.9782,0.8611],[0.9788,0.8446],[0.9774,0.8303],[0.9736,0.817],[0.968,0.8067],[0.9585,0.7959],[0.9347,0.7787],[0.9179,0.7626],[0.9029,0.7451],[0.8769,0.7095],[0.8718,0.7036],[0.8672,0.7005],[0.8621,0.6994],[0.8369,0.7016],[0.8225,0.7018],[0.8069,0.7002],[0.7948,0.6968],[0.7836,0.6908],[0.7733,0.6817],[0.7647,0.6699],[0.7593,0.6575],[0.7561,0.6421],[0.7561,0.6259],[0.7601,0.6052],[0.7665,0.5856],[0.7723,0.5734],[0.7797,0.5623],[0.8116,0.5299],[0.822,0.5169],[0.8304,0.5041],[0.8388,0.4876],[0.8449,0.4716],[0.8486,0.4564],[0.8501,0.4399],[0.8497,0.425],[0.8471,0.411],[0.842,0.3965],[0.8347,0.3832],[0.8268,0.3724],[0.817,0.3619],[0.8078,0.354],[0.7854,0.337],[0.7742,0.3263],[0.7645,0.313],[0.7583,0.2991],[0.7557,0.289],[0.754,0.2765],[0.7537,0.2654],[0.7548,0.2527],[0.7572,0.2386],[0.7603,0.2268],[0.7645,0.2157],[0.7705,0.2036],[0.7768,0.1937],[0.7852,0.1837],[0.7953,0.174],[0.8151,0.1586],[0.8299,0.1394],[0.8374,0.1312],[0.8503,0.1209],[0.8641,0.1139],[0.8749,0.1111],[0.8876,0.11],[0.9071,0.1118],[0.9165,0.1136],[0.9214,0.1161],[0.9259,0.1199],[0.9397,0.1356],[0.9456,0.1436],[0.9488,0.1495],[0.9509,0.156],[0.9524,0.1706],[0.9526,0.2571],[0.9533,0.2932],[0.9534,0.4854]],"startIdx":3,"tip":[0.9533,0.5231],"startText":[0.5015,0.0577,0],"finishText":[0.9715,0.3712,90],"aspect":1.317};
+
+function buildClassic(aspect) {
+  const W = Math.round(H * clamp(aspect, 1.2, 2.1)), T = WALL_T;
+  const X = (u) => T + u * (W - 2 * T), Y = (v) => T + v * (H - 2 * T);
+  const C = CLASSIC, BT = CLASSIC_BAR;
+  const walls = [
+    { x: 0, y: 0, w: W, h: T, frame: true }, { x: 0, y: H - T, w: W, h: T, frame: true },
+    { x: 0, y: 0, w: T, h: H, frame: true }, { x: W - T, y: 0, w: T, h: H, frame: true },
+  ];
+  C.vbars.forEach(([u, a, b]) => {
+    const y0 = a <= 0.001 ? 0 : Y(a), y1 = b >= 0.999 ? H : Y(b);
+    walls.push({ x: X(u) - BT / 2, y: y0, w: BT, h: y1 - y0 });
+  });
+  C.hbars.forEach(([a, b, v]) => {
+    const x0 = a <= 0.001 ? 0 : X(a), x1 = b >= 0.999 ? W : X(b);
+    walls.push({ x: x0, y: Y(v) - BT / 2, w: x1 - x0, h: BT });
+  });
+  const pathPts = C.line.map(([u, v]) => ({ x: X(u), y: Y(v) }));
+  const st = pathPts[C.startIdx];
+  return {
+    n: CLASSIC_LEVEL, classic: true, W, H, aspect, cell: 120,
+    ox: T / 2, oy: T / 2, mw: W - T, mh: H - T,
+    walls, holes: C.holes.map(([u, v]) => ({ x: X(u), y: Y(v), r: HOLE_R })),
+    pathPts, startIdx: C.startIdx, tip: { x: X(C.tip[0]), y: Y(C.tip[1]) },
+    start: { x: st.x, y: st.y },
+    labels: C.labels.map(([t, u, v]) => ({ text: t, x: X(u), y: Y(v), size: 22, weight: 600, angle: 0 })),
+    startText: { text: 'START', x: X(C.startText[0]), y: Y(C.startText[1]), angle: 0 },
+    finishText: { text: 'ZIEL', x: X(C.finishText[0]), y: Y(C.finishText[1]), angle: Math.PI / 2 },
+  };
+}
+
+// ---- Linie mit runden Ecken (Kreisbögen wie beim Holzlabyrinth)
+function filletPath(wp, R) {
+  const out = [{ x: wp[0].x, y: wp[0].y }];
+  for (let i = 1; i < wp.length - 1; i++) {
+    const A = wp[i - 1], B = wp[i], C = wp[i + 1];
+    let ax = A.x - B.x, ay = A.y - B.y, cx = C.x - B.x, cy = C.y - B.y;
+    const la = Math.hypot(ax, ay), lc = Math.hypot(cx, cy);
+    if (la < 1e-6 || lc < 1e-6) continue;
+    ax /= la; ay /= la; cx /= lc; cy /= lc;
+    const ang = Math.acos(clamp(ax * cx + ay * cy, -1, 1));
+    if (Math.PI - ang < 0.03) { out.push({ x: B.x, y: B.y }); continue; }
+    const th = Math.tan(ang / 2);
+    const t = Math.min(R / th, la * 0.5, lc * 0.5), r = t * th;
+    let bx = ax + cx, by = ay + cy; const bl = Math.hypot(bx, by); bx /= bl; by /= bl;
+    const dC = r / Math.sin(ang / 2), ox = B.x + bx * dC, oy = B.y + by * dC;
+    const a1 = Math.atan2(B.y + ay * t - oy, B.x + ax * t - ox), a2 = Math.atan2(B.y + cy * t - oy, B.x + cx * t - ox);
+    let da = a2 - a1; while (da > Math.PI) da -= TAU; while (da < -Math.PI) da += TAU;
+    const steps = Math.max(2, Math.ceil(Math.abs(da) * r / 5));
+    for (let s = 0; s <= steps; s++) { const a = a1 + da * s / steps; out.push({ x: ox + r * Math.cos(a), y: oy + r * Math.sin(a) }); }
+  }
+  out.push({ x: wp[wp.length - 1].x, y: wp[wp.length - 1].y });
+  return out;
+}
+function resample(pts, step) {
+  const out = [pts[0]];
+  let carry = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], l = Math.hypot(b.x - a.x, b.y - a.y);
+    let s = step - carry;
+    while (s <= l) { out.push({ x: a.x + (b.x - a.x) * s / l, y: a.y + (b.y - a.y) * s / l }); s += step; }
+    carry = l - (s - step);
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+const unit = (dx, dy) => { const l = Math.hypot(dx, dy) || 1; return { x: dx / l, y: dy / l }; };
+// Text so drehen, dass er von links nach rechts bzw. von oben nach unten lesbar ist
+function readable(a) { while (a > Math.PI / 2 + 1e-6) a -= Math.PI; while (a <= -Math.PI / 2 + 1e-6) a += Math.PI; return a; }
+
+// ---- Beschriftung so platzieren, dass sie weder Leisten, Löcher, Linie noch andere Schrift berührt
+const measureCtx = document.createElement('canvas').getContext('2d');
+function textSize(text, size, weight, spacing = 0) {
+  measureCtx.font = `${weight} ${size}px ${FONT}`;
+  return { w: measureCtx.measureText(text).width + spacing * (text.length - 1), h: size * 0.74 };
+}
+function boxPoints(cx, cy, w, h, a) {
+  const c = Math.cos(a), s = Math.sin(a), pts = [];
+  for (const fx of [-0.5, 0, 0.5]) for (const fy of [-0.5, 0, 0.5]) {
+    const x = fx * w, y = fy * h; pts.push({ x: cx + x * c - y * s, y: cy + x * s + y * c });
+  }
+  return pts;
+}
+function clearance(L, pts, placed) {
+  let m = Infinity;
+  for (const p of pts) {
+    if (p.x < WALL_T || p.y < WALL_T || p.x > L.W - WALL_T || p.y > L.H - WALL_T) return -99;
+    for (const w of L.walls) {
+      const dx = Math.max(w.x - p.x, 0, p.x - w.x - w.w), dy = Math.max(w.y - p.y, 0, p.y - w.y - w.h);
+      m = Math.min(m, Math.hypot(dx, dy));
+    }
+    for (const h of L.holes) m = Math.min(m, Math.hypot(h.x - p.x, h.y - p.y) - h.r);
+    for (const q of L.samples) m = Math.min(m, Math.hypot(q.x - p.x, q.y - p.y) - LINE_W / 2);
+    for (const b of placed) for (const q of b.pts) m = Math.min(m, Math.hypot(q.x - p.x, q.y - p.y) - 3);
+  }
+  return m;
+}
+
+// gemeinsame Aufbereitung: Linie, Haken, Pfeil, Nummern, START/ZIEL, Zwischenziele
+function finishLevel(L) {
+  if (!L.pathPts) {
+    const wp = L.waypoints, d = unit(wp[1].x - wp[0].x, wp[1].y - wp[0].y);
+    // Haken am Anfang wie beim Holzlabyrinth – zur freieren Seite
+    const hook = [-1, 1].map((sg) => {
+      const a = sg * 63 * Math.PI / 180, bx = -d.x, by = -d.y;
+      return { x: wp[0].x + (bx * Math.cos(a) - by * Math.sin(a)) * 24, y: wp[0].y + (bx * Math.sin(a) + by * Math.cos(a)) * 24 };
+    });
+    L.samples = [];
+    const hk = clearance(L, [hook[1]], []) > clearance(L, [hook[0]], []) ? hook[1] : hook[0];
+    L.pathPts = [hk, ...filletPath(wp, Math.min(L.cell * 0.42, 70))];
+    L.startIdx = 1;
+    L.tip = { x: wp[wp.length - 1].x, y: wp[wp.length - 1].y };
+  }
+  const P = L.pathPts;
+  // Linie endet am Pfeilfuß
+  const pe = P[Math.max(0, P.length - 6)];
+  const endDir = unit(L.tip.x - pe.x, L.tip.y - pe.y);
+  L.arrowBase = { x: L.tip.x - endDir.x * ARROW_L, y: L.tip.y - endDir.y * ARROW_L };
+  L.arrowDir = endDir;
+  if (!L.classic) {
+    let k = P.length - 1;
+    while (k > L.startIdx + 1 && Math.hypot(P[k].x - L.tip.x, P[k].y - L.tip.y) < ARROW_L) k--;
+    L.linePts = [...P.slice(0, k + 1), L.arrowBase];
+  } else {
+    L.linePts = P;
+  }
+  L.samples = resample(L.linePts, 8);
+  L.finish = { x: L.tip.x, y: L.tip.y };
+  if (!L.waypoints) L.waypoints = resample(P.slice(L.startIdx), 28).concat([{ x: L.tip.x, y: L.tip.y }]);
+
+  const placed = [];
+  const place = (cands, text, size, weight, spacing) => {
+    const sz = textSize(text, size, weight, spacing);
+    let best = null;
+    for (const c of cands) {
+      const pts = boxPoints(c.x, c.y, sz.w + 4, sz.h + 4, c.angle);
+      const sc = clearance(L, pts, placed) + (c.bonus || 0);
+      if (!best || sc > best.sc) best = { ...c, sc, pts };
+    }
+    placed.push(best);
+    return { text, x: best.x, y: best.y, angle: best.angle, size, weight, spacing };
+  };
+
+  // START und ZIEL entlang der Linie
+  if (!L.startText) {
+    const s0 = P[L.startIdx], k1 = Math.min(P.length - 1, L.startIdx + 6);
+    const d = unit(P[k1].x - s0.x, P[k1].y - s0.y), nrm = { x: -d.y, y: d.x }, a = readable(Math.atan2(d.y, d.x));
+    const sz = textSize('START', 21, 600, 1.5), cands = [];
+    for (const along of [0.7, 1.0, 1.4]) for (const side of [-1, 1]) {
+      const off = sz.h / 2 + LINE_W / 2 + 9, s = sz.w * along;
+      cands.push({ x: s0.x + d.x * s + nrm.x * off * side, y: s0.y + d.y * s + nrm.y * off * side, angle: a });
+    }
+    L.startText = place(cands, 'START', 21, 600, 1.5);
+  } else {
+    L.startText = { ...L.startText, size: 21, weight: 600, spacing: 1.5 };
+  }
+  if (!L.finishText) {
+    const d = endDir, nrm = { x: -d.y, y: d.x }, a = readable(Math.atan2(d.y, d.x));
+    const sz = textSize('ZIEL', 21, 600, 1.5), cands = [];
+    for (const along of [0.6, 0.9, 1.3]) for (const side of [-1, 1]) {
+      const off = sz.h / 2 + LINE_W / 2 + 9, s = ARROW_L + sz.w * along;
+      cands.push({ x: L.tip.x - d.x * s + nrm.x * off * side, y: L.tip.y - d.y * s + nrm.y * off * side, angle: a });
+    }
+    L.finishText = place(cands, 'ZIEL', 21, 600, 1.5);
+  } else {
+    L.finishText = { ...L.finishText, size: 21, weight: 600, spacing: 1.5 };
+  }
+
+  // Lochnummern in Wegrichtung
+  if (!L.labels) {
+    const prog = (h) => { let bi = 0, bd = Infinity; L.samples.forEach((q, i) => { const dd = Math.hypot(q.x - h.x, q.y - h.y); if (dd < bd) { bd = dd; bi = i; } }); return bi; };
+    const order = L.holes.map((h) => ({ h, k: prog(h) })).sort((a, b) => a.k - b.k);
+    L.labels = order.map(({ h }, i) => {
+      const text = String(i + 1), sz = textSize(text, 20, 600), cands = [];
+      for (let j = 0; j < 8; j++) {
+        const a = -Math.PI / 2 + j * Math.PI / 4, dist = h.r + 5 + (Math.abs(Math.cos(a)) * sz.w + Math.abs(Math.sin(a)) * sz.h) / 2;
+        cands.push({ x: h.x + Math.cos(a) * dist, y: h.y + Math.sin(a) * dist, angle: 0, bonus: j === 0 ? 1.5 : j === 1 || j === 7 ? 0.8 : 0 });
+      }
+      return place(cands, text, 20, 600, 0);
+    });
+  }
+
+  // Zwischenziele (beim Klassiker an festen Stellen der Strecke)
+  if (!L.checkpoints) {
+    const tot = L.samples.length;
+    L.checkpoints = [0.28, 0.53, 0.77].map((f) => { const q = L.samples[Math.round(f * (tot - 1))]; return { x: q.x, y: q.y }; });
+  }
+  return L;
+}
+
 function buildLevel(n, aspect = 1.43) {
+  if (n === CLASSIC_LEVEL) return finishLevel(buildClassic(aspect));
   const W = Math.round(H * clamp(aspect, 1.2, 2.1));
   const cfg = levelConfig(n), holeTarget = cfg[2];
   const cols = Math.min(cfg[0], Math.floor((W - WALL_T) / MIN_CELL)), rows = Math.min(cfg[1], Math.floor((H - WALL_T) / MIN_CELL));
@@ -208,23 +408,15 @@ function buildLevel(n, aspect = 1.43) {
   const step = path.length <= 14 ? 10 : 13; // wenige Zwischenziele
   const checkpoints = [];
   for (let k = step; k < path.length - 1; k += step) {
-    checkpoints.push({ k, x: waypoints[k].x, y: waypoints[k].y, label: checkpoints.length + 1 });
+    checkpoints.push({ x: waypoints[k].x, y: waypoints[k].y });
   }
 
-  const startP = waypoints[0], goalP = waypoints[path.length - 1];
-  return {
+  const startP = waypoints[0];
+  return finishLevel({
     n, cols, rows, cell, cw, ch, ox, oy, mw, mh, W, H, aspect,
     walls, holes, waypoints, checkpoints,
     start: { x: startP.x, y: startP.y },
-    goal: { x: goalP.x, y: goalP.y, r: GOAL_R },
-    pathIndex,
-  };
-}
-
-function pathIndexAt(L, x, y) {
-  const c = Math.floor((x - L.ox) / L.cw), r = Math.floor((y - L.oy) / L.ch);
-  if (c < 0 || r < 0 || c >= L.cols || r >= L.rows) return -1;
-  return L.pathIndex[r * L.cols + c];
+  });
 }
 
 // ============================================================ Ton
@@ -286,9 +478,10 @@ const Sound = (() => {
   function roll(speed) {
     if (!ctx) return;
     const t = ctx.currentTime, v = Math.min(speed / 1500, 1);
-    rollGain.gain.setTargetAtTime(speed < 6 ? 0 : 0.55 * Math.pow(v, 1.1), t, 0.03);
-    rollSrc.playbackRate.setTargetAtTime(clamp(speed / 520, 0.06, 3.2), t, 0.04);
-    rollLP.frequency.setTargetAtTime(700 + v * 3800, t, 0.05);
+    // langsam wie bisher, schnell deutlich gedeckelt (Sättigung statt weiter ansteigender Lautstärke)
+    rollGain.gain.setTargetAtTime(speed < 6 ? 0 : 0.15 * Math.tanh(speed / 500), t, 0.03);
+    rollSrc.playbackRate.setTargetAtTime(clamp(speed / 520, 0.06, 2.4), t, 0.04);
+    rollLP.frequency.setTargetAtTime(700 + v * 2000, t, 0.05);
   }
 
   // eine gedämpfte Eigenschwingung
@@ -497,28 +690,23 @@ function floorTex(L) {
   const key = L.W + 'x' + L.H;
   if (tex.floorKey !== key) {
     tex.floorKey = key;
+    // helles Birkensperrholz wie beim Holzlabyrinth: fast gleichmäßig, feine, breite Maserung
     tex.floor = makeWood(Math.round(L.W * 1.25), Math.round(L.H * 1.25), 0.8,
-      { light: [243, 222, 184], dark: [203, 166, 114], seed: 11, ring: 46, warp: 110, ringAmt: 0.42 });
+      { light: [236, 222, 188], dark: [214, 195, 156], seed: 11, ring: 120, warp: 260, ringAmt: 0.3 });
   }
   return tex.floor;
 }
 function railTex() {
   if (!tex.rail) {
-    tex.rail = makeWood(2700, WALL_T * RAIL_PX, 1 / RAIL_PX,
-      { light: [226, 176, 118], dark: [156, 104, 58], seed: 29, ring: 5.5, warp: 9, ringAmt: 0.5 });
+    // Kiefernleisten: hell mit kräftigen orangebraunen Spätholzstreifen
+    tex.rail = makeWood(2700, 30 * RAIL_PX, 1 / RAIL_PX,
+      { light: [236, 199, 140], dark: [182, 114, 52], seed: 29, ring: 6.5, warp: 5, ringAmt: 0.72 });
   }
   return tex.rail;
 }
 
-function drawHole(c, h, goal) {
+function drawHole(c, h) {
   const R = h.r;
-  if (goal) { // aufgedruckte rote Ringe
-    c.save(); c.globalCompositeOperation = 'multiply';
-    for (const [rr, lw] of [[R + 9, 5], [R + 17, 3]]) {
-      c.beginPath(); c.arc(h.x, h.y, rr, 0, TAU); c.strokeStyle = 'rgba(176,36,28,.9)'; c.lineWidth = lw; c.stroke();
-    }
-    c.restore();
-  }
   // leicht abgedunkelte Fase rund um die Bohrung
   let g = c.createRadialGradient(h.x, h.y, R, h.x, h.y, R + 4);
   g.addColorStop(0, 'rgba(60,32,10,.45)'); g.addColorStop(1, 'rgba(60,32,10,0)');
@@ -545,6 +733,20 @@ function drawHole(c, h, goal) {
   c.strokeStyle = 'rgba(45,22,6,.6)'; c.lineWidth = 1.5; c.stroke();
 }
 
+function printText(c, t) {
+  c.save();
+  c.translate(t.x, t.y); c.rotate(t.angle || 0);
+  c.font = `${t.weight || 500} ${t.size}px ${FONT}`;
+  c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = INK;
+  if (t.spacing && 'letterSpacing' in c) c.letterSpacing = t.spacing + 'px';
+  c.fillText(t.text, 0, 1);
+  c.restore();
+}
+function drawCheckpoint(c, p, reached) {
+  c.beginPath(); c.arc(p.x, p.y, 9.5, 0, TAU);
+  c.fillStyle = reached ? '#3d8a40' : 'rgba(236,226,204,.95)'; c.fill();
+  c.lineWidth = 3; c.strokeStyle = INK; c.stroke();
+}
 function label(c, text, x, y, size, color) {
   c.font = `800 ${size}px ui-rounded, "SF Pro Rounded", system-ui, sans-serif`;
   c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = color; c.fillText(text, x, y);
@@ -563,34 +765,28 @@ function renderStatic() {
   c.drawImage(floorTex(L), 0, 0, L.W, L.H);
   // Lichteinfall von oben links
   let g = c.createRadialGradient(L.W * 0.3, L.H * 0.22, 0, L.W * 0.3, L.H * 0.22, L.W * 0.85);
-  g.addColorStop(0, 'rgba(255,250,236,.20)'); g.addColorStop(0.6, 'rgba(255,250,236,.03)'); g.addColorStop(1, 'rgba(60,32,10,.10)');
+  g.addColorStop(0, 'rgba(255,250,236,.12)'); g.addColorStop(0.6, 'rgba(255,250,236,.02)'); g.addColorStop(1, 'rgba(60,32,10,.10)');
   c.fillStyle = g; c.fillRect(0, 0, L.W, L.H);
 
-  // Aufdruck: Linie, Start, Nummern (die Maserung scheint durch)
+  // Aufdruck (die Maserung scheint durch): Linie mit Haken, Pfeil, START/ZIEL, Lochnummern
   c.save(); c.globalCompositeOperation = 'multiply';
-  const wp = L.waypoints;
-  c.beginPath(); c.moveTo(wp[0].x, wp[0].y);
-  for (let i = 1; i < wp.length - 1; i++) {
-    c.quadraticCurveTo(wp[i].x, wp[i].y, (wp[i].x + wp[i + 1].x) / 2, (wp[i].y + wp[i + 1].y) / 2);
-  }
-  c.lineTo(wp[wp.length - 1].x, wp[wp.length - 1].y);
-  c.strokeStyle = 'rgba(30,20,12,.86)'; c.lineWidth = 3.2; c.lineCap = 'round'; c.lineJoin = 'round'; c.stroke();
-  c.beginPath(); c.arc(L.start.x, L.start.y, BALL_R + 7, 0, TAU);
-  c.strokeStyle = 'rgba(30,20,12,.86)'; c.lineWidth = 3; c.stroke();
-  if (L.cell >= 150) label(c, 'START', L.start.x, L.start.y + BALL_R + 22, 15, 'rgba(30,20,12,.85)');
-  if (L.cell >= 150) label(c, 'ZIEL', L.goal.x, L.goal.y + GOAL_R + 30, 15, 'rgba(176,36,28,.95)');
+  c.strokeStyle = INK; c.fillStyle = INK; c.lineWidth = LINE_W; c.lineCap = 'butt'; c.lineJoin = 'round';
+  const lp = L.linePts;
+  c.beginPath(); c.moveTo(lp[0].x, lp[0].y);
+  for (let i = 1; i < lp.length; i++) c.lineTo(lp[i].x, lp[i].y);
+  c.stroke();
+  const ad = L.arrowDir, an = { x: -ad.y, y: ad.x }, ab = L.arrowBase;
+  c.beginPath();
+  c.moveTo(L.tip.x, L.tip.y);
+  c.lineTo(ab.x + an.x * ARROW_W / 2 - ad.x * 2, ab.y + an.y * ARROW_W / 2 - ad.y * 2);
+  c.lineTo(ab.x + ad.x * 6, ab.y + ad.y * 6);
+  c.lineTo(ab.x - an.x * ARROW_W / 2 - ad.x * 2, ab.y - an.y * ARROW_W / 2 - ad.y * 2);
+  c.closePath(); c.fill();
+  [L.startText, L.finishText, ...L.labels].forEach((t) => printText(c, t));
   c.restore();
 
-  // Löcher + Ziel
-  L.holes.forEach((h) => drawHole(c, h, false));
-  drawHole(c, L.goal, true);
-
-  // Zwischenziele (Nummern)
-  L.checkpoints.forEach((p) => {
-    c.beginPath(); c.arc(p.x, p.y, 11, 0, TAU);
-    c.fillStyle = 'rgba(250,242,226,.92)'; c.fill(); c.strokeStyle = 'rgba(30,20,12,.86)'; c.lineWidth = 2; c.stroke();
-    label(c, String(p.label), p.x, p.y + 0.5, 12.5, '#1c120a');
-  });
+  // Löcher
+  L.holes.forEach((h) => drawHole(c, h));
 
   // Leisten: erst Schatten (Kontaktschatten rundum + Schlagschatten nach unten rechts) ...
   c.save(); c.fillStyle = '#6e4420';
@@ -603,17 +799,17 @@ function renderStatic() {
   const rail = railTex(), rng = mulberry32(L.n * 31 + 7);
   L.walls.forEach((w) => {
     const horiz = w.w >= w.h, len = horiz ? w.w : w.h, th = horiz ? w.h : w.w;
-    const sx = Math.floor(rng() * Math.max(1, rail.width - len * RAIL_PX - 1));
+    const sx = Math.floor(rng() * Math.max(1, rail.width - len * RAIL_PX - 1)), sy = Math.floor(rng() * Math.max(1, rail.height - th * RAIL_PX));
     c.save();
     if (horiz) c.translate(w.x, w.y); else { c.translate(w.x + w.w, w.y); c.rotate(Math.PI / 2); }
-    c.drawImage(rail, sx, 0, len * RAIL_PX, th * RAIL_PX, 0, 0, len, th);
+    c.drawImage(rail, sx, sy, Math.min(len * RAIL_PX, rail.width - sx), th * RAIL_PX, 0, 0, len, th);
     // Kantenrundung: bei senkrechten Leisten liegt die lichtzugewandte Kante nach der Drehung "unten"
     const eg = c.createLinearGradient(0, 0, 0, th);
     const hi = 'rgba(255,241,214,', lo = 'rgba(52,26,8,';
     if (horiz) {
-      eg.addColorStop(0, hi + '.62)'); eg.addColorStop(0.2, hi + '.10)'); eg.addColorStop(0.62, lo + '0)'); eg.addColorStop(1, lo + '.46)');
+      eg.addColorStop(0, hi + '.38)'); eg.addColorStop(0.2, hi + '.06)'); eg.addColorStop(0.62, lo + '0)'); eg.addColorStop(1, lo + '.42)');
     } else {
-      eg.addColorStop(0, lo + '.46)'); eg.addColorStop(0.38, lo + '0)'); eg.addColorStop(0.8, hi + '.10)'); eg.addColorStop(1, hi + '.62)');
+      eg.addColorStop(0, lo + '.42)'); eg.addColorStop(0.38, lo + '0)'); eg.addColorStop(0.8, hi + '.06)'); eg.addColorStop(1, hi + '.38)');
     }
     c.fillStyle = eg; c.fillRect(0, 0, len, th);
     // Stirnseiten leicht abdunkeln
@@ -684,15 +880,8 @@ function render() {
   ctx.drawImage(staticCanvas, 0, 0);
   ctx.setTransform(view.scale * view.dpr, 0, 0, view.scale * view.dpr, view.ox * view.dpr, view.oy * view.dpr);
 
-  // erreichte Zwischenziele markieren
-  if (store.settings.checkpoints) {
-    for (let i = 0; i < game.cpReached && i < L.checkpoints.length; i++) {
-      const p = L.checkpoints[i];
-      ctx.beginPath(); ctx.arc(p.x, p.y, 11, 0, Math.PI * 2); ctx.fillStyle = '#3d8a40'; ctx.fill();
-      ctx.strokeStyle = 'rgba(28,18,10,.85)'; ctx.lineWidth = 2; ctx.stroke();
-      label(ctx, String(p.label), p.x, p.y + 0.5, 12.5, '#fff');
-    }
-  }
+  // Zwischenziele
+  if (store.settings.checkpoints) L.checkpoints.forEach((p, i) => drawCheckpoint(ctx, p, i < game.cpReached));
 
   // Lackglanz, der beim Neigen über das Brett wandert
   const gx = L.W * (0.4 - tilt.x * 1.2), gy = L.H * (0.32 - tilt.y * 1.2);
@@ -780,7 +969,7 @@ function layout() {
 const game = {
   mode: 'menu', // menu | countdown | play | paused | won
   n: 1, base: null, level: null,
-  ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, state: 'held', heldT: 0, toGoal: false, hole: null, over: null },
+  ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, state: 'held', heldT: 0, hole: null, over: null },
   time: 0, falls: 0, cpReached: 0, cdT: 0, cdStep: 0, cdThen: 'play',
 };
 
@@ -884,9 +1073,9 @@ function physics(dt) {
   const ax = G_BASE * sens * tilt.x, ay = G_BASE * sens * tilt.y;
   const sp0 = Math.hypot(b.vx, b.vy);
   let sub = clamp(Math.ceil((sp0 * dt) / (BALL_R * 0.35)), 1, 16);
-  const reach = L.goal.r + BALL_R + sp0 * dt + 4;
-  for (let i = -1; i < L.holes.length; i++) {
-    const ho = i < 0 ? L.goal : L.holes[i];
+  const reach = HOLE_R + BALL_R + sp0 * dt + 4;
+  for (let i = 0; i < L.holes.length; i++) {
+    const ho = L.holes[i];
     if (Math.abs(ho.x - b.x) < reach && Math.abs(ho.y - b.y) < reach) { sub = Math.max(sub, 8); break; }
   }
   const h = dt / sub;
@@ -901,8 +1090,8 @@ function physics(dt) {
 
     // Liegt der Mittelpunkt über einer Bohrung, trägt nur noch die Lochkante
     let over = null;
-    for (let i = -1; i < L.holes.length; i++) {
-      const ho = i < 0 ? L.goal : L.holes[i];
+    for (let i = 0; i < L.holes.length; i++) {
+      const ho = L.holes[i];
       const dx = ho.x - b.x, dy = ho.y - b.y;
       if (dx * dx + dy * dy < ho.r * ho.r) { over = ho; break; }
     }
@@ -910,7 +1099,7 @@ function physics(dt) {
     if (over) {
       rimImpact = Math.max(rimImpact, holeContact(b, over));
       if (b.z > BALL_R * 0.9) { // Mittelpunkt unter der Brettoberfläche: kein Zurück mehr
-        b.state = 'falling'; b.hole = over; b.toGoal = over === L.goal;
+        b.state = 'falling'; b.hole = over;
         Sound.roll(0); Sound.rim(rimImpact);
         return;
       }
@@ -953,11 +1142,14 @@ function physics(dt) {
   Sound.roll(b.z > -0.5 ? Math.hypot(b.vx, b.vy) : 0);
 
   if (store.settings.checkpoints) {
-    const k = pathIndexAt(L, b.x, b.y);
     const next = L.checkpoints[game.cpReached];
-    if (next && k >= next.k && Math.hypot(b.x - next.x, b.y - next.y) < L.cell * 0.45) {
+    if (next && Math.hypot(b.x - next.x, b.y - next.y) < Math.max(30, L.cell * 0.4)) {
       game.cpReached++; Sound.checkpoint();
     }
+  }
+  // Ziel: Kugel erreicht die Pfeilspitze
+  if (b.z <= 0.5 && Math.hypot(b.x - L.finish.x, b.y - L.finish.y) < FINISH_R) {
+    b.state = 'done'; Sound.roll(0); win();
   }
 }
 
@@ -1004,12 +1196,9 @@ function frame(now) {
     else if (b.state === 'falling') {
       if (fallStep(dt)) {
         Sound.land();
-        if (b.toGoal) { b.state = 'gone'; win(); }
-        else {
-          b.state = 'gone'; game.falls++; updateHud();
-          if (game.falls >= MAX_FALLS) lose();
-          else { toast('Noch ein Versuch!', 1600); setTimeout(() => { if (game.mode === 'play' || game.mode === 'paused') respawn(); }, 600); }
-        }
+        b.state = 'gone'; game.falls++; updateHud();
+        if (game.falls >= MAX_FALLS) lose();
+        else { toast('Noch ein Versuch!', 1600); setTimeout(() => { if (game.mode === 'play' || game.mode === 'paused') respawn(); }, 600); }
       }
     } else if (b.state === 'held') {
       b.heldT += dt; if (b.heldT > 0.55) b.state = 'roll';
