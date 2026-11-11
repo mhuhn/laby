@@ -5,7 +5,8 @@ Klassisches Kugellabyrinth aus Holz als PWA fürs iPad: Die Metallkugel wird dur
 - 20 Level, von 4×3 Feldern mit einem Loch bis 10×7 Feldern mit fast 50 Löchern
 - Leitlinie mit nummerierten Zwischenzielen; nach einem Fall wahlweise zurück zum letzten Zwischenziel oder zum Start
 - Bestzeiten und freigeschaltete Level werden lokal gespeichert
-- Läuft im Quer- und Hochformat und offline (Service Worker)
+- Immer im Querformat, läuft offline (Service Worker)
+- Holzmaserung, Stahlkugel und Klänge werden im Browser berechnet – keine Bild- oder Tondateien
 - Am Computer zum Testen mit den Pfeiltasten steuerbar
 
 ## Spielen

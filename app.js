@@ -11,7 +11,9 @@ const SENS = [0.62, 1, 1.5];
 const ROLL_RES = 70;                             // Rollwiderstand (Einheiten/s²)
 const RESTITUTION = 0.32;
 const MAX_FALLS = 2;                             // beim zweiten Loch ist das Level verloren
-const FALL_T = 0.16;                             // Dauer des Verschwindens im Loch (s)
+const G_FALL = 9000;                             // Fallbeschleunigung senkrecht zum Brett
+const GONE_Z = BALL_R + 46;                      // so tief unter dem Brett ist die Kugel nicht mehr zu sehen
+const TAU = Math.PI * 2;
 const MAX_TILT = Math.sin(28 * Math.PI / 180);
 const STORE_KEY = 'laby.v1';
 
@@ -185,7 +187,7 @@ function buildLevel(n, aspect = 1.43) {
       const closed = c < cols && (r === 0 || r === rows || !(open[id(c, r)] & N));
       if (closed && run < 0) run = c;
       if (!closed && run >= 0) {
-        walls.push({ x: ox + run * cw - T / 2, y: oy + r * ch - T / 2, w: (c - run) * cw + T, h: T });
+        walls.push({ x: ox + run * cw - T / 2, y: oy + r * ch - T / 2, w: (c - run) * cw + T, h: T, frame: r === 0 || r === rows });
         run = -1;
       }
     }
@@ -196,7 +198,7 @@ function buildLevel(n, aspect = 1.43) {
       const closed = r < rows && (c === 0 || c === cols || !(open[id(c, r)] & Wd));
       if (closed && run < 0) run = r;
       if (!closed && run >= 0) {
-        walls.push({ x: ox + c * cw - T / 2, y: oy + run * ch - T / 2, w: T, h: (r - run) * ch + T });
+        walls.push({ x: ox + c * cw - T / 2, y: oy + run * ch - T / 2, w: T, h: (r - run) * ch + T, frame: c === 0 || c === cols });
         run = -1;
       }
     }
@@ -226,58 +228,80 @@ function pathIndexAt(L, x, y) {
 }
 
 // ============================================================ Ton
-// Rollgeräusch = leises, tiefes Grummeln des Holzbretts + feines Knistern der Maserung,
-// beides an die Geschwindigkeit gekoppelt. Kein breitbandiges Rauschen (klingt nach Meer).
+// Physikalisch angelehnte Klänge:
+//  - Rollen: ein raues "Oberflächenprofil" wird umso schneller abgetastet, je schneller die Kugel rollt,
+//    und regt die festen Resonanzen des hohlen Holzkastens an.
+//  - Stöße: kurze, stark gedämpfte Eigenschwingungen der Holzleiste (Stabmoden 1 : 2,76 : 5,4) + Kontaktklick.
+//  - Loch: Ticken am Lochrand, dumpfer Aufschlag im Kasten, kleine Hüpfer, Ausrollen in der Rinne.
 const Sound = (() => {
-  let ctx = null, master, rumbleGain, rumbleLP, flutter, flutterDepth, white, lastHit = 0, grainAcc = 0;
-  function init() {
-    if (ctx) { if (ctx.state !== 'running') ctx.resume(); return; }
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return;
-    ctx = new AC();
-    master = ctx.createGain(); master.gain.value = store.settings.sound ? 1 : 0; master.connect(ctx.destination);
-    white = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
-    const d = white.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  let ctx = null, master, white, surf, rollSrc, rollGain, rollLP, lastHit = -1, lastRim = -1;
+  const frac = (v) => v - Math.floor(v);
 
-    // Grummeln: Rauschen -> Tiefpass -> Holzresonanz -> Lautstärke (mit leichtem Flattern der Kugeldrehung)
-    const src = ctx.createBufferSource(); src.buffer = white; src.loop = true;
-    rumbleLP = ctx.createBiquadFilter(); rumbleLP.type = 'lowpass'; rumbleLP.frequency.value = 160; rumbleLP.Q.value = 0.5;
-    const lp2 = ctx.createBiquadFilter(); lp2.type = 'lowpass'; lp2.frequency.value = 420; lp2.Q.value = 0.5;
-    const body = ctx.createBiquadFilter(); body.type = 'peaking'; body.frequency.value = 190; body.Q.value = 4; body.gain.value = 9;
-    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 60;
-    rumbleGain = ctx.createGain(); rumbleGain.gain.value = 0;
-    const flutterGain = ctx.createGain(); flutterGain.gain.value = 1;
-    flutter = ctx.createOscillator(); flutter.frequency.value = 3;
-    flutterDepth = ctx.createGain(); flutterDepth.gain.value = 0.25;
-    flutter.connect(flutterDepth); flutterDepth.connect(flutterGain.gain); flutter.start();
-    src.connect(rumbleLP); rumbleLP.connect(lp2); lp2.connect(body); body.connect(hp); hp.connect(flutterGain);
-    flutterGain.connect(rumbleGain); rumbleGain.connect(master); src.start();
+  function init(testCtx) {
+    if (ctx && !testCtx) { if (ctx.state !== 'running') ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC && !testCtx) return;
+    ctx = testCtx || new AC(); lastHit = -1; lastRim = -1;
+    master = ctx.createGain(); master.gain.value = store.settings.sound ? 1 : 0;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -12; comp.ratio.value = 5; comp.attack.value = 0.002; comp.release.value = 0.15;
+    master.connect(comp); comp.connect(ctx.destination);
+
+    const sr = ctx.sampleRate;
+    white = ctx.createBuffer(1, sr, sr);
+    const wd = white.getChannelData(0);
+    for (let i = 0; i < wd.length; i++) wd[i] = Math.random() * 2 - 1;
+
+    // Oberflächenprofil: geglättetes Rauschen (Holzfasern) + vereinzelte kleine Unebenheiten
+    surf = ctx.createBuffer(1, sr * 3, sr);
+    const sd = surf.getChannelData(0);
+    let a = 0, b2 = 0;
+    for (let i = 0; i < sd.length; i++) {
+      const w = Math.random() * 2 - 1;
+      a += 0.22 * (w - a);
+      const bump = Math.random() < 0.0035 ? (Math.random() * 2 - 1) * 4 : 0;
+      b2 += 0.45 * (w * 0.25 + bump - b2);
+      sd[i] = a * 0.7 + b2 * 0.8;
+    }
+    const fade = 400;
+    for (let i = 0; i < fade; i++) { const k = i / fade; sd[i] *= k; sd[sd.length - 1 - i] *= k; }
+
+    rollSrc = ctx.createBufferSource(); rollSrc.buffer = surf; rollSrc.loop = true; rollSrc.playbackRate.value = 0.1;
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 70;
+    rollLP = ctx.createBiquadFilter(); rollLP.type = 'lowpass'; rollLP.frequency.value = 900; rollLP.Q.value = 0.4;
+    rollGain = ctx.createGain(); rollGain.gain.value = 0;
+    rollSrc.connect(hp);
+    // Resonanzen von Brett und Kasten
+    [[150, 2.5, 1.0], [310, 4, 0.8], [640, 5, 0.5], [1250, 4, 0.3], [2400, 3, 0.14]].forEach(([f, q, g]) => {
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q;
+      const gg = ctx.createGain(); gg.gain.value = g;
+      hp.connect(bp); bp.connect(gg); gg.connect(rollLP);
+    });
+    const direct = ctx.createGain(); direct.gain.value = 0.2; hp.connect(direct); direct.connect(rollLP);
+    rollLP.connect(rollGain); rollGain.connect(master);
+    rollSrc.start();
   }
   function setEnabled(on) { if (master) master.gain.value = on ? 1 : 0; }
-  function roll(speed, dt = 0) {
+
+  function roll(speed) {
     if (!ctx) return;
-    const t = ctx.currentTime;
-    const v = Math.min(speed / 1600, 1);
-    rumbleGain.gain.setTargetAtTime(speed < 8 ? 0 : 0.22 * Math.pow(v, 1.3), t, 0.04);
-    rumbleLP.frequency.setTargetAtTime(110 + v * 260, t, 0.05);
-    flutter.frequency.setTargetAtTime(Math.max(0.5, speed / (2 * Math.PI * BALL_R)), t, 0.1);
-    // Knistern: ein winziges Klicken etwa alle 22 Einheiten Weg (Holzfasern)
-    if (dt > 0 && speed > 15) {
-      grainAcc += speed * dt / 22;
-      let n = 0;
-      while (grainAcc >= 1 && n < 6) {
-        grainAcc -= 1; n++;
-        const at = t + Math.random() * dt;
-        burst(at, 0.006 + Math.random() * 0.006, 2200 + Math.random() * 2600, 2.5, (0.006 + 0.022 * v) * (0.4 + Math.random()), 'bandpass');
-      }
-    } else grainAcc = 0;
+    const t = ctx.currentTime, v = Math.min(speed / 1500, 1);
+    rollGain.gain.setTargetAtTime(speed < 6 ? 0 : 0.55 * Math.pow(v, 1.1), t, 0.03);
+    rollSrc.playbackRate.setTargetAtTime(clamp(speed / 520, 0.06, 3.2), t, 0.04);
+    rollLP.frequency.setTargetAtTime(700 + v * 3800, t, 0.05);
   }
-  function burst(t, dur, freq, q, gain, type = 'bandpass') {
+
+  // eine gedämpfte Eigenschwingung
+  function mode(t, f, g, tau, dest) {
+    const o = ctx.createOscillator(); o.frequency.value = f;
+    const e = ctx.createGain(); e.gain.setValueAtTime(g, t); e.gain.setTargetAtTime(0, t, tau);
+    o.connect(e); e.connect(dest || master); o.start(t); o.stop(t + tau * 7 + 0.01);
+  }
+  function burst(t, dur, freq, q, gain, type = 'bandpass', dest) {
     const s = ctx.createBufferSource(); s.buffer = white;
     const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
     const g = ctx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    s.connect(f); f.connect(g); g.connect(master); s.start(t, Math.random() * 1.5); s.stop(t + dur + 0.02);
+    s.connect(f); f.connect(g); g.connect(dest || master); s.start(t, Math.random() * 0.9); s.stop(t + dur + 0.02);
   }
   function tone(t, freq, dur, gain, type = 'sine') {
     const o = ctx.createOscillator(); o.type = type; o.frequency.value = freq;
@@ -285,33 +309,61 @@ const Sound = (() => {
     g.gain.exponentialRampToValueAtTime(gain, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.02);
   }
-  function hit(impact) {
-    if (!ctx || impact < 60) return;
+
+  // Stahlkugel gegen Holzleiste; jede Leiste hat ihre eigene Tonhöhe, der Rahmen klingt tiefer
+  function hit(impact, wallIdx = 0, frame = false) {
+    if (!ctx || impact < 45) return;
     const now = ctx.currentTime;
-    if (now - lastHit < 0.035) return; lastHit = now;
-    const v = Math.min(impact / 1100, 1);
-    tone(now, 520 + Math.random() * 60, 0.05, 0.35 * v, 'triangle');   // Holzleiste
-    burst(now, 0.025, 1500, 1.5, 0.3 * v);                                // Klack
-    tone(now, 3300 + Math.random() * 400, 0.04, 0.05 * v, 'sine');        // Stahl
+    if (now - lastHit < 0.03) return; lastHit = now;
+    const v = Math.min(impact / 1300, 1), amp = 0.8 * Math.pow(v, 0.8);
+    const seed = frac(Math.sin((wallIdx + 1) * 12.9898) * 43758.5453);
+    const f0 = (frame ? 290 + seed * 90 : 430 + seed * 330) * (0.985 + Math.random() * 0.03);
+    const long = frame ? 1.4 : 1;
+    mode(now, f0, amp, 0.022 * long);
+    mode(now, f0 * 2.76, amp * 0.5 * (0.35 + v), 0.012 * long);
+    mode(now, f0 * 5.4, amp * 0.3 * v, 0.006);
+    mode(now, 170, amp * 0.6, 0.028);                               // Brett schwingt mit
+    burst(now, 0.004 + 0.004 * v, 3000 + 2500 * v, 0.7, amp * 0.7, 'highpass'); // Kontakt
   }
-  function drop() {
-    if (!ctx) return; const t = ctx.currentTime;
-    tone(t, 120, 0.18, 0.45); burst(t, 0.06, 700, 1, 0.3);
-    [0.12, 0.2, 0.26, 0.3].forEach((dt, i) => {
-      tone(t + dt, 480 - i * 30, 0.04, 0.22 / (i + 1), 'triangle');
-      burst(t + dt, 0.02, 1500, 1.5, 0.15 / (i + 1));
-    });
+  // Kugel tickt an Lochrand oder Lochwand
+  function rim(impact) {
+    if (!ctx || impact < 110) return;
+    const now = ctx.currentTime;
+    if (now - lastRim < 0.025) return; lastRim = now;
+    const v = Math.min(impact / 900, 1), amp = 0.3 * Math.pow(v, 0.8), f = 560 + Math.random() * 160;
+    mode(now, f, amp, 0.012); mode(now, f * 2.6, amp * 0.4, 0.006); mode(now, 170, amp * 0.5, 0.02);
+    burst(now, 0.004, 3200, 0.7, amp * 0.5, 'highpass');
+  }
+  // Kugel schlägt im Kasten unter dem Brett auf, hüpft und rollt in der Rinne aus
+  function land() {
+    if (!ctx) return;
+    const t = ctx.currentTime + 0.015;
+    const box = ctx.createBiquadFilter(); box.type = 'lowpass'; box.frequency.value = 1400; box.connect(master);
+    const thud = (at, g, k) => {
+      mode(at, 104 * k, g, 0.05, box); mode(at, 212 * k, g * 0.7, 0.04, box);
+      mode(at, 395 * k, g * 0.4, 0.022, box); mode(at, 930 * k, g * 0.15, 0.01, box);
+      burst(at, 0.012, 1100, 0.8, g * 0.5, 'lowpass', box);
+    };
+    thud(t, 0.32, 1); thud(t + 0.105, 0.14, 1.04); thud(t + 0.165, 0.06, 1.07);
+    // Ausrollen
+    const src = ctx.createBufferSource(); src.buffer = surf; src.loop = true;
+    src.playbackRate.setValueAtTime(0.45, t + 0.18); src.playbackRate.linearRampToValueAtTime(1.25, t + 0.8);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 230; bp.Q.value = 1.6;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t + 0.18); g.gain.linearRampToValueAtTime(0.5, t + 0.36); g.gain.linearRampToValueAtTime(0.0, t + 0.82);
+    src.connect(bp); bp.connect(g); g.connect(box); src.start(t + 0.18); src.stop(t + 0.86);
+    mode(t + 0.83, 470, 0.09, 0.016, box); mode(t + 0.83, 1290, 0.035, 0.008, box); // stößt am Ende an
   }
   function checkpoint() { if (!ctx) return; const t = ctx.currentTime; tone(t, 880, 0.12, 0.1); tone(t + 0.07, 1320, 0.14, 0.08); }
   function win() {
-    if (!ctx) return; const t = ctx.currentTime;
+    if (!ctx) return; const t = ctx.currentTime + 0.35;
     // zwei leise, weiche Glockentöne statt Fanfare
     tone(t + 0.12, 659, 0.9, 0.045, 'sine'); tone(t + 0.12, 1318, 0.5, 0.012, 'sine');
     tone(t + 0.30, 880, 1.1, 0.04, 'sine'); tone(t + 0.30, 1760, 0.6, 0.01, 'sine');
   }
-  function lost() { if (!ctx) return; const t = ctx.currentTime + 0.1; tone(t, 330, 0.5, 0.05); tone(t + 0.18, 247, 0.7, 0.045); }
+  function lost() { if (!ctx) return; const t = ctx.currentTime + 0.5; tone(t, 330, 0.5, 0.05); tone(t + 0.18, 247, 0.7, 0.045); }
   function tick(hi) { if (!ctx) return; tone(ctx.currentTime, hi ? 1046 : 660, 0.12, 0.13, 'triangle'); }
-  return { init, setEnabled, roll, hit, drop, checkpoint, win, lost, tick };
+  return { init, setEnabled, roll, hit, rim, land, checkpoint, win, lost, tick };
 })();
 
 // ============================================================ Neigungssensor
@@ -394,41 +446,103 @@ const staticCanvas = document.createElement('canvas');
 const sctx = staticCanvas.getContext('2d');
 const view = { scale: 1, ox: 0, oy: 0, dpr: 1, w: 0, h: 0, rot: 0 };
 
-function woodGrain(c, rng, x, y, w, h, opts) {
-  const { lines, alpha, dark, vertical } = opts;
-  c.save();
-  c.beginPath(); c.rect(x, y, w, h); c.clip();
-  const len = vertical ? h : w, span = vertical ? w : h;
-  for (let i = 0; i < lines; i++) {
-    const base = rng() * span, amp = 2 + rng() * 9, f = 0.004 + rng() * 0.012, ph = rng() * 6.28;
-    const amp2 = rng() * 3, f2 = 0.03 + rng() * 0.05;
-    c.beginPath();
-    for (let t = -10; t <= len + 10; t += 14) {
-      const o = base + Math.sin(t * f + ph) * amp + Math.sin(t * f2 + ph * 2) * amp2;
-      if (vertical) { if (t < 0) c.moveTo(x + o, y + t); else c.lineTo(x + o, y + t); }
-      else { if (t < 0) c.moveTo(x + t, y + o); else c.lineTo(x + t, y + o); }
-    }
-    c.strokeStyle = `rgba(${dark},${(alpha * (0.4 + rng() * 0.9)).toFixed(3)})`;
-    c.lineWidth = 0.6 + rng() * 2.2;
-    c.stroke();
+// ---- Holztextur: Jahresringe, Fasern und Poren, pixelweise berechnet
+function hash2(ix, iy, seed) {
+  let h = (Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + seed) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, seed) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy, seed), b = hash2(ix + 1, iy, seed), c = hash2(ix, iy + 1, seed), d = hash2(ix + 1, iy + 1, seed);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+function makeWood(wpx, hpx, upp, o) {
+  const cv = document.createElement('canvas'); cv.width = wpx; cv.height = hpx;
+  const c = cv.getContext('2d'), img = c.createImageData(wpx, hpx), d = img.data;
+  const [lr, lg, lb] = o.light, [dr, dg, db] = o.dark, s = o.seed;
+  // langsame Verläufe nur an Stützstellen berechnen und dazwischen interpolieren
+  const GS = 8, gw = Math.ceil(wpx / GS) + 2, gh = Math.ceil(hpx / GS) + 2;
+  const warpG = new Float32Array(gw * gh), macroG = new Float32Array(gw * gh);
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+    const X = gx * GS * upp, Y = gy * GS * upp;
+    warpG[gy * gw + gx] = (vnoise(X * 0.0016, Y * 0.006, s) - 0.5) * o.warp + (vnoise(X * 0.007, Y * 0.02, s + 1) - 0.5) * o.warp * 0.16;
+    macroG[gy * gw + gx] = vnoise(X * 0.0012, Y * 0.0045, s + 4);
   }
-  c.restore();
+  let p = 0;
+  for (let py = 0; py < hpx; py++) {
+    const Y = py * upp, gy = Math.floor(py / GS), ty = py / GS - gy;
+    for (let px = 0; px < wpx; px++) {
+      const X = px * upp, gx = Math.floor(px / GS), tx = px / GS - gx, gi = gy * gw + gx;
+      const warp = (warpG[gi] * (1 - tx) + warpG[gi + 1] * tx) * (1 - ty) + (warpG[gi + gw] * (1 - tx) + warpG[gi + gw + 1] * tx) * ty;
+      const macro = (macroG[gi] * (1 - tx) + macroG[gi + 1] * tx) * (1 - ty) + (macroG[gi + gw] * (1 - tx) + macroG[gi + gw + 1] * tx) * ty;
+      const rc = (Y + warp) / o.ring, ri = Math.floor(rc), t = rc - ri;
+      // Frühholz hell, Spätholz dunkel, dann scharfe Ringgrenze
+      const ring = (t < 0.82 ? Math.pow(t / 0.82, 2.2) : 1 - (t - 0.82) / 0.18) * (0.45 + 0.55 * hash2(ri, 7, s));
+      const fiber = vnoise(X * 0.011, Y * 1.15, s + 2);
+      const fine = vnoise(X * 0.06, Y * 2.4, s + 3);
+      let sh = o.ringAmt * ring + 0.2 * fiber + 0.1 * fine + 0.26 * macro;
+      if (hash2(Math.floor(X / 9), Math.floor(Y * 1.3), s + 5) > 0.986) sh += 0.3; // Poren
+      sh = sh < 0 ? 0 : sh > 1 ? 1 : sh;
+      d[p++] = lr + (dr - lr) * sh; d[p++] = lg + (dg - lg) * sh; d[p++] = lb + (db - lb) * sh; d[p++] = 255;
+    }
+  }
+  c.putImageData(img, 0, 0);
+  return cv;
+}
+const tex = { floor: null, floorKey: '', rail: null };
+const RAIL_PX = 2; // Texturpixel pro Einheit bei den Leisten
+function floorTex(L) {
+  const key = L.W + 'x' + L.H;
+  if (tex.floorKey !== key) {
+    tex.floorKey = key;
+    tex.floor = makeWood(Math.round(L.W * 1.25), Math.round(L.H * 1.25), 0.8,
+      { light: [243, 222, 184], dark: [203, 166, 114], seed: 11, ring: 46, warp: 110, ringAmt: 0.42 });
+  }
+  return tex.floor;
+}
+function railTex() {
+  if (!tex.rail) {
+    tex.rail = makeWood(2700, WALL_T * RAIL_PX, 1 / RAIL_PX,
+      { light: [226, 176, 118], dark: [156, 104, 58], seed: 29, ring: 5.5, warp: 9, ringAmt: 0.5 });
+  }
+  return tex.rail;
 }
 
 function drawHole(c, h, goal) {
-  // dunkler Rand im Holz
-  c.beginPath(); c.arc(h.x, h.y, h.r + 2.2, 0, Math.PI * 2);
-  c.fillStyle = 'rgba(70,40,15,.55)'; c.fill();
-  const g = c.createRadialGradient(h.x + h.r * 0.25, h.y + h.r * 0.3, h.r * 0.1, h.x, h.y, h.r);
-  g.addColorStop(0, '#040201'); g.addColorStop(0.7, '#120a04'); g.addColorStop(1, '#3d2712');
-  c.beginPath(); c.arc(h.x, h.y, h.r, 0, Math.PI * 2); c.fillStyle = g; c.fill();
-  c.beginPath(); c.arc(h.x, h.y, h.r + 0.6, Math.PI * 0.05, Math.PI * 0.75);
-  c.strokeStyle = 'rgba(255,236,200,.45)'; c.lineWidth = 1.6; c.stroke();
-  if (goal) {
-    for (const [rr, col, lw] of [[h.r + 9, '#b3261e', 5], [h.r + 17, '#b3261e', 3]]) {
-      c.beginPath(); c.arc(h.x, h.y, rr, 0, Math.PI * 2); c.strokeStyle = col; c.lineWidth = lw; c.stroke();
+  const R = h.r;
+  if (goal) { // aufgedruckte rote Ringe
+    c.save(); c.globalCompositeOperation = 'multiply';
+    for (const [rr, lw] of [[R + 9, 5], [R + 17, 3]]) {
+      c.beginPath(); c.arc(h.x, h.y, rr, 0, TAU); c.strokeStyle = 'rgba(176,36,28,.9)'; c.lineWidth = lw; c.stroke();
     }
+    c.restore();
   }
+  // leicht abgedunkelte Fase rund um die Bohrung
+  let g = c.createRadialGradient(h.x, h.y, R, h.x, h.y, R + 4);
+  g.addColorStop(0, 'rgba(60,32,10,.45)'); g.addColorStop(1, 'rgba(60,32,10,0)');
+  c.fillStyle = g; c.beginPath(); c.arc(h.x, h.y, R + 4, 0, TAU); c.fill();
+
+  c.save();
+  c.beginPath(); c.arc(h.x, h.y, R, 0, TAU); c.clip();
+  // Bohrungswand: unten rechts vom Licht getroffen, oben links im Schatten
+  g = c.createLinearGradient(h.x - R * 0.7, h.y - R * 0.7, h.x + R * 0.7, h.y + R * 0.7);
+  g.addColorStop(0, '#170d05'); g.addColorStop(0.5, '#3f2611'); g.addColorStop(0.85, '#8e6538'); g.addColorStop(1, '#b08350');
+  c.fillStyle = g; c.fillRect(h.x - R, h.y - R, R * 2, R * 2);
+  // Blick in den dunklen Kasten, zum Licht hin versetzt -> Sichel der Wand bleibt sichtbar
+  const ox = -R * 0.11, oy = -R * 0.13;
+  g = c.createRadialGradient(h.x + ox, h.y + oy, R * 0.55, h.x + ox, h.y + oy, R * 1.04);
+  g.addColorStop(0, '#080503'); g.addColorStop(0.72, '#0b0704'); g.addColorStop(0.9, 'rgba(14,8,4,.82)'); g.addColorStop(1, 'rgba(20,11,5,0)');
+  c.fillStyle = g; c.fillRect(h.x - R, h.y - R, R * 2, R * 2);
+  c.restore();
+
+  // Kante: helle Fase zum Licht, dunkle Kante im Schatten
+  c.lineCap = 'round';
+  c.beginPath(); c.arc(h.x, h.y, R + 0.5, -Math.PI * 0.2, Math.PI * 0.7);
+  c.strokeStyle = 'rgba(255,240,212,.42)'; c.lineWidth = 1.1; c.stroke();
+  c.beginPath(); c.arc(h.x, h.y, R + 0.4, Math.PI * 0.8, Math.PI * 1.7);
+  c.strokeStyle = 'rgba(45,22,6,.6)'; c.lineWidth = 1.5; c.stroke();
 }
 
 function label(c, text, x, y, size, color) {
@@ -439,81 +553,128 @@ function label(c, text, x, y, size, color) {
 function renderStatic() {
   const L = game.level; if (!L) return;
   staticCanvas.width = canvas.width; staticCanvas.height = canvas.height;
-  const c = sctx;
+  const c = sctx, px = view.scale * view.dpr;
   c.setTransform(1, 0, 0, 1, 0, 0);
   c.clearRect(0, 0, staticCanvas.width, staticCanvas.height);
-  c.setTransform(view.scale * view.dpr, 0, 0, view.scale * view.dpr, view.ox * view.dpr, view.oy * view.dpr);
-  const rng = mulberry32(L.n * 31 + 7);
+  c.setTransform(px, 0, 0, px, view.ox * view.dpr, view.oy * view.dpr);
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
 
-  // Boden (Birke) über das ganze Brett
-  const bg = c.createLinearGradient(0, 0, L.W, L.H);
-  bg.addColorStop(0, '#ead0a2'); bg.addColorStop(1, '#dcbc8a');
-  c.fillStyle = bg; c.fillRect(0, 0, L.W, L.H);
-  woodGrain(c, rng, 0, 0, L.W, L.H, { lines: 120, alpha: 0.09, dark: '120,78,34', vertical: false });
+  // Boden: lackiertes Birkenholz
+  c.drawImage(floorTex(L), 0, 0, L.W, L.H);
+  // Lichteinfall von oben links
+  let g = c.createRadialGradient(L.W * 0.3, L.H * 0.22, 0, L.W * 0.3, L.H * 0.22, L.W * 0.85);
+  g.addColorStop(0, 'rgba(255,250,236,.20)'); g.addColorStop(0.6, 'rgba(255,250,236,.03)'); g.addColorStop(1, 'rgba(60,32,10,.10)');
+  c.fillStyle = g; c.fillRect(0, 0, L.W, L.H);
 
-  // Leitlinie
+  // Aufdruck: Linie, Start, Nummern (die Maserung scheint durch)
+  c.save(); c.globalCompositeOperation = 'multiply';
   const wp = L.waypoints;
   c.beginPath(); c.moveTo(wp[0].x, wp[0].y);
   for (let i = 1; i < wp.length - 1; i++) {
     c.quadraticCurveTo(wp[i].x, wp[i].y, (wp[i].x + wp[i + 1].x) / 2, (wp[i].y + wp[i + 1].y) / 2);
   }
   c.lineTo(wp[wp.length - 1].x, wp[wp.length - 1].y);
-  c.strokeStyle = 'rgba(28,18,10,.82)'; c.lineWidth = 3.4; c.lineCap = 'round'; c.lineJoin = 'round'; c.stroke();
-
-  // Start
-  c.beginPath(); c.arc(L.start.x, L.start.y, BALL_R + 7, 0, Math.PI * 2);
-  c.strokeStyle = 'rgba(28,18,10,.82)'; c.lineWidth = 3; c.stroke();
-  if (L.cell >= 150) label(c, 'START', L.start.x, L.start.y + BALL_R + 22, 15, 'rgba(28,18,10,.8)');
+  c.strokeStyle = 'rgba(30,20,12,.86)'; c.lineWidth = 3.2; c.lineCap = 'round'; c.lineJoin = 'round'; c.stroke();
+  c.beginPath(); c.arc(L.start.x, L.start.y, BALL_R + 7, 0, TAU);
+  c.strokeStyle = 'rgba(30,20,12,.86)'; c.lineWidth = 3; c.stroke();
+  if (L.cell >= 150) label(c, 'START', L.start.x, L.start.y + BALL_R + 22, 15, 'rgba(30,20,12,.85)');
+  if (L.cell >= 150) label(c, 'ZIEL', L.goal.x, L.goal.y + GOAL_R + 30, 15, 'rgba(176,36,28,.95)');
+  c.restore();
 
   // Löcher + Ziel
   L.holes.forEach((h) => drawHole(c, h, false));
   drawHole(c, L.goal, true);
-  if (L.cell >= 150) label(c, 'ZIEL', L.goal.x, L.goal.y + GOAL_R + 30, 15, '#b3261e');
 
   // Zwischenziele (Nummern)
   L.checkpoints.forEach((p) => {
-    c.beginPath(); c.arc(p.x, p.y, 11, 0, Math.PI * 2);
-    c.fillStyle = '#fbf3e3'; c.fill(); c.strokeStyle = 'rgba(28,18,10,.85)'; c.lineWidth = 2; c.stroke();
+    c.beginPath(); c.arc(p.x, p.y, 11, 0, TAU);
+    c.fillStyle = 'rgba(250,242,226,.92)'; c.fill(); c.strokeStyle = 'rgba(30,20,12,.86)'; c.lineWidth = 2; c.stroke();
     label(c, String(p.label), p.x, p.y + 0.5, 12.5, '#1c120a');
   });
 
-  // Wandschatten
-  c.save(); c.shadowColor = 'rgba(45,22,6,.5)'; c.shadowBlur = 9; c.shadowOffsetX = 5; c.shadowOffsetY = 7;
-  c.fillStyle = '#7a4c26';
+  // Leisten: erst Schatten (Kontaktschatten rundum + Schlagschatten nach unten rechts) ...
+  c.save(); c.fillStyle = '#6e4420';
+  c.shadowColor = 'rgba(40,20,6,.42)'; c.shadowBlur = 5 * px; c.shadowOffsetX = 0; c.shadowOffsetY = 0;
+  L.walls.forEach((w) => c.fillRect(w.x, w.y, w.w, w.h));
+  c.shadowColor = 'rgba(40,20,6,.5)'; c.shadowBlur = 7 * px; c.shadowOffsetX = 5.5 * px; c.shadowOffsetY = 7.5 * px;
   L.walls.forEach((w) => c.fillRect(w.x, w.y, w.w, w.h));
   c.restore();
-  // Wände
+  // ... dann die Leisten selbst mit Maserung in Längsrichtung und gerundeten Kanten
+  const rail = railTex(), rng = mulberry32(L.n * 31 + 7);
   L.walls.forEach((w) => {
-    const horiz = w.w > w.h;
-    const g = horiz ? c.createLinearGradient(0, w.y, 0, w.y + w.h) : c.createLinearGradient(w.x, 0, w.x + w.w, 0);
-    g.addColorStop(0, '#d39d63'); g.addColorStop(0.5, '#c08850'); g.addColorStop(1, '#a8733f');
-    c.fillStyle = g; c.fillRect(w.x, w.y, w.w, w.h);
-    woodGrain(c, rng, w.x, w.y, w.w, w.h, { lines: Math.max(2, Math.round(Math.max(w.w, w.h) / 120)), alpha: 0.22, dark: '90,50,18', vertical: !horiz });
-    c.strokeStyle = 'rgba(255,238,205,.55)'; c.lineWidth = 1.2;
-    c.beginPath(); c.moveTo(w.x + 0.6, w.y + w.h - 0.6); c.lineTo(w.x + 0.6, w.y + 0.6); c.lineTo(w.x + w.w - 0.6, w.y + 0.6); c.stroke();
-    c.strokeStyle = 'rgba(70,38,12,.5)';
-    c.beginPath(); c.moveTo(w.x + w.w - 0.6, w.y + 0.6); c.lineTo(w.x + w.w - 0.6, w.y + w.h - 0.6); c.lineTo(w.x + 0.6, w.y + w.h - 0.6); c.stroke();
+    const horiz = w.w >= w.h, len = horiz ? w.w : w.h, th = horiz ? w.h : w.w;
+    const sx = Math.floor(rng() * Math.max(1, rail.width - len * RAIL_PX - 1));
+    c.save();
+    if (horiz) c.translate(w.x, w.y); else { c.translate(w.x + w.w, w.y); c.rotate(Math.PI / 2); }
+    c.drawImage(rail, sx, 0, len * RAIL_PX, th * RAIL_PX, 0, 0, len, th);
+    // Kantenrundung: bei senkrechten Leisten liegt die lichtzugewandte Kante nach der Drehung "unten"
+    const eg = c.createLinearGradient(0, 0, 0, th);
+    const hi = 'rgba(255,241,214,', lo = 'rgba(52,26,8,';
+    if (horiz) {
+      eg.addColorStop(0, hi + '.62)'); eg.addColorStop(0.2, hi + '.10)'); eg.addColorStop(0.62, lo + '0)'); eg.addColorStop(1, lo + '.46)');
+    } else {
+      eg.addColorStop(0, lo + '.46)'); eg.addColorStop(0.38, lo + '0)'); eg.addColorStop(0.8, hi + '.10)'); eg.addColorStop(1, hi + '.62)');
+    }
+    c.fillStyle = eg; c.fillRect(0, 0, len, th);
+    // Stirnseiten leicht abdunkeln
+    const cg = c.createLinearGradient(0, 0, len, 0), ef = Math.min(0.5, 2.5 / len);
+    cg.addColorStop(0, hi + (horiz ? '.3)' : '.3)')); cg.addColorStop(ef, hi + '0)'); cg.addColorStop(1 - ef, lo + '0)'); cg.addColorStop(1, lo + '.35)');
+    c.fillStyle = cg; c.fillRect(0, 0, len, th);
+    c.restore();
   });
+
+  // Randabdunklung
+  g = c.createRadialGradient(L.W / 2, L.H / 2, L.H * 0.45, L.W / 2, L.H / 2, L.W * 0.75);
+  g.addColorStop(0, 'rgba(40,20,6,0)'); g.addColorStop(1, 'rgba(40,20,6,.20)');
+  c.fillStyle = g; c.fillRect(0, 0, L.W, L.H);
 }
 
-function drawBall(c, x, y, s, dark) {
+// polierte Stahlkugel: spiegelt oben das Licht, unten das Holzbrett
+function drawBall(c, x, y, s, dark, shadow, lift = 0) {
   const r = BALL_R * s;
-  // Schatten
-  if (s > 0.9) {
-    const sg = c.createRadialGradient(x + 4, y + 6, r * 0.2, x + 4, y + 6, r * 1.25);
-    sg.addColorStop(0, 'rgba(30,15,5,.5)'); sg.addColorStop(1, 'rgba(30,15,5,0)');
-    c.fillStyle = sg; c.beginPath(); c.arc(x + 4, y + 6, r * 1.25, 0, Math.PI * 2); c.fill();
+  const lx = clamp(-0.36 - tilt.x * 0.9, -0.62, -0.1), ly = clamp(-0.4 - tilt.y * 0.9, -0.64, -0.12);
+  let g;
+  if (shadow) {
+    const sx = x + r * (0.36 + tilt.x * 0.9) + lift * 0.5, sy = y + r * (0.48 + tilt.y * 0.9) + lift * 0.65;
+    g = c.createRadialGradient(sx, sy, r * 0.2, sx, sy, r * 1.3);
+    g.addColorStop(0, 'rgba(35,18,6,.5)'); g.addColorStop(0.6, 'rgba(35,18,6,.2)'); g.addColorStop(1, 'rgba(35,18,6,0)');
+    c.fillStyle = g; c.beginPath(); c.arc(sx, sy, r * 1.3, 0, TAU); c.fill();
+    g = c.createRadialGradient(x + r * 0.08, y + r * 0.12, r * 0.55, x + r * 0.08, y + r * 0.12, r * 1.1);
+    g.addColorStop(0, 'rgba(20,10,3,.6)'); g.addColorStop(1, 'rgba(20,10,3,0)');
+    if (lift < 1) { c.fillStyle = g; c.beginPath(); c.arc(x + r * 0.08, y + r * 0.12, r * 1.1, 0, TAU); c.fill(); }
   }
-  const g = c.createRadialGradient(x - r * 0.38, y - r * 0.42, r * 0.05, x, y, r);
-  g.addColorStop(0, '#ffffff'); g.addColorStop(0.18, '#eef1f4'); g.addColorStop(0.5, '#a9b0b8');
-  g.addColorStop(0.82, '#5d646d'); g.addColorStop(1, '#2c3036');
-  c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fillStyle = g; c.fill();
-  // Spiegelung des Holzbodens unten
-  const rg = c.createLinearGradient(0, y + r * 0.2, 0, y + r);
-  rg.addColorStop(0, 'rgba(214,170,110,0)'); rg.addColorStop(1, 'rgba(214,170,110,.45)');
-  c.fillStyle = rg; c.beginPath(); c.arc(x, y, r * 0.96, 0, Math.PI * 2); c.fill();
-  c.beginPath(); c.arc(x - r * 0.36, y - r * 0.4, r * 0.18, 0, Math.PI * 2); c.fillStyle = 'rgba(255,255,255,.95)'; c.fill();
-  if (dark > 0) { c.beginPath(); c.arc(x, y, r + 0.5, 0, Math.PI * 2); c.fillStyle = `rgba(10,5,2,${dark})`; c.fill(); }
+  c.save();
+  c.beginPath(); c.arc(x, y, r, 0, TAU); c.clip();
+  // Mitte: spiegelt den hellen Raum über dem Brett
+  g = c.createRadialGradient(x + lx * r, y + ly * r, r * 0.02, x + lx * r * 0.25, y + ly * r * 0.25, r * 0.95);
+  g.addColorStop(0, '#ffffff'); g.addColorStop(0.18, '#e9edf1'); g.addColorStop(0.5, '#bcc3cb');
+  g.addColorStop(0.85, '#8a929c'); g.addColorStop(1, '#6f7781');
+  c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
+  // Rand: von oben gesehen spiegelt der äußere Ring das Holzbrett (ab 45° Flächenneigung),
+  // getrennt durch den dunklen Horizont; ganz außen liegt der eigene Schatten
+  g = c.createRadialGradient(x, y, r * 0.62, x, y, r);
+  g.addColorStop(0, 'rgba(60,54,50,0)'); g.addColorStop(0.3, 'rgba(48,42,38,.42)'); g.addColorStop(0.44, 'rgba(60,48,38,.6)');
+  g.addColorStop(0.56, 'rgba(176,140,98,.72)'); g.addColorStop(0.78, 'rgba(126,92,58,.82)'); g.addColorStop(0.93, 'rgba(58,40,24,.92)');
+  g.addColorStop(1, 'rgba(24,17,11,.97)');
+  c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
+  // dem Licht abgewandte Seite etwas dunkler
+  g = c.createLinearGradient(x - r * 0.7, y - r * 0.7, x + r * 0.7, y + r * 0.7);
+  g.addColorStop(0, 'rgba(255,250,240,.16)'); g.addColorStop(0.5, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(14,8,4,.34)');
+  c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
+  // Glanzlichter
+  const hx = x + lx * r, hy = y + ly * r;
+  g = c.createRadialGradient(hx, hy, 0, hx, hy, r * 0.44);
+  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.2, 'rgba(255,255,255,.9)'); g.addColorStop(0.45, 'rgba(255,255,255,.2)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
+  const qx = x - lx * r * 1.25, qy = y - ly * r * 1.2;
+  g = c.createRadialGradient(qx, qy, 0, qx, qy, r * 0.2);
+  g.addColorStop(0, 'rgba(255,244,222,.5)'); g.addColorStop(1, 'rgba(255,244,222,0)');
+  c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
+  if (dark > 0) { c.fillStyle = `rgba(8,4,2,${dark})`; c.fillRect(x - r, y - r, r * 2, r * 2); }
+  c.restore();
+  // feine Lichtkante oben links
+  c.beginPath(); c.arc(x, y, r - 0.45, Math.PI * 0.95, Math.PI * 1.6);
+  c.strokeStyle = `rgba(255,255,255,${0.38 * (1 - dark)})`; c.lineWidth = Math.max(0.5, r * 0.06); c.stroke();
 }
 
 function render() {
@@ -533,15 +694,31 @@ function render() {
     }
   }
 
+  // Lackglanz, der beim Neigen über das Brett wandert
+  const gx = L.W * (0.4 - tilt.x * 1.2), gy = L.H * (0.32 - tilt.y * 1.2);
+  const gl = ctx.createRadialGradient(gx, gy, 0, gx, gy, L.W * 0.55);
+  gl.addColorStop(0, 'rgba(255,250,236,.11)'); gl.addColorStop(1, 'rgba(255,250,236,0)');
+  ctx.fillStyle = gl; ctx.fillRect(0, 0, L.W, L.H);
+
   const b = game.ball;
   if (b.state === 'gone') return;
-  if (b.state === 'falling') {
-    const t = clamp(b.fallT / FALL_T, 0, 1), e = t * (2 - t);
-    drawBall(ctx, b.x + (b.fx - b.x) * e, b.y + (b.fy - b.y) * e, 1 - 0.5 * e, 0.95 * e);
+  const ho = b.state === 'falling' ? b.hole : b.over;
+  if (ho && b.z > 0.2) {
+    // Kugel sinkt ins Loch: sichtbar ist nur, was über dem Brett liegt oder durch die Bohrung zu sehen ist
+    const s = 340 / (340 + b.z), hC = BALL_R - b.z;
+    const rho = (hC >= 0 ? BALL_R : hC > -BALL_R ? Math.sqrt(BALL_R * BALL_R - hC * hC) : 0) * s;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(ho.x, ho.y, ho.r, 0, TAU);
+    if (rho > 0.5) { ctx.moveTo(b.x + rho, b.y); ctx.arc(b.x, b.y, rho, 0, TAU); }
+    ctx.clip();
+    drawBall(ctx, b.x, b.y, s, clamp((b.z - 3) / 42, 0, 0.93), b.z < 3);
+    ctx.restore();
   } else if (b.state === 'held' && Math.floor(b.heldT * 8) % 2 === 1) {
-    ctx.globalAlpha = 0.45; drawBall(ctx, b.x, b.y, 1, 0); ctx.globalAlpha = 1;
+    ctx.globalAlpha = 0.45; drawBall(ctx, b.x, b.y, 1, 0, true); ctx.globalAlpha = 1;
+  } else if (b.z < -0.3) { // kurzer Hüpfer nach einem Stoß an der Lochkante
+    drawBall(ctx, b.x, b.y, 340 / (340 + b.z), 0, true, -b.z);
   } else {
-    drawBall(ctx, b.x, b.y, 1, 0);
+    drawBall(ctx, b.x, b.y, 1, 0, true);
   }
 }
 
@@ -603,7 +780,7 @@ function layout() {
 const game = {
   mode: 'menu', // menu | countdown | play | paused | won
   n: 1, base: null, level: null,
-  ball: { x: 0, y: 0, vx: 0, vy: 0, fx: 0, fy: 0, state: 'held', fallT: 0, heldT: 0, toGoal: false },
+  ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, state: 'held', heldT: 0, toGoal: false, hole: null, over: null },
   time: 0, falls: 0, cpReached: 0, cdT: 0, cdStep: 0, cdThen: 'play',
 };
 
@@ -625,7 +802,7 @@ function startLevel(n) {
 
 function placeBall(p) {
   const b = game.ball;
-  b.x = p.x; b.y = p.y; b.vx = 0; b.vy = 0; b.state = 'held'; b.heldT = 0; b.fallT = 0;
+  b.x = p.x; b.y = p.y; b.z = 0; b.vx = 0; b.vy = 0; b.vz = 0; b.state = 'held'; b.heldT = 0; b.hole = null; b.over = null;
 }
 
 function startCountdown() {
@@ -677,36 +854,73 @@ function lose() {
   setTimeout(() => { if (game.mode === 'lost') showScreen('#scrLost'); }, 450);
 }
 
+// Kontakt der Kugel mit Lochrand (Mittelpunkt noch über dem Brett) bzw. Lochwand (darunter).
+// z = Tiefe des Kugelmittelpunkts unter der Ruhelage. Liefert die Aufprallgeschwindigkeit.
+function holeContact(b, ho) {
+  const dx = ho.x - b.x, dy = ho.y - b.y, d = Math.hypot(dx, dy);
+  if (d < 1e-6) return 0;
+  const ux = dx / d, uy = dy / d;              // waagerecht zur Lochmitte
+  const e = ho.r - d, hC = BALL_R - b.z;       // Abstand zur Kante waagerecht / Höhe über der Brettoberfläche
+  let nh, nu, pen;
+  if (hC > 0) {
+    const dist = Math.hypot(e, hC);
+    if (dist >= BALL_R) return 0;
+    nh = e / dist; nu = hC / dist; pen = BALL_R - dist;
+  } else {
+    if (e >= BALL_R) return 0;
+    nh = 1; nu = 0; pen = BALL_R - e;
+  }
+  b.x += ux * nh * pen; b.y += uy * nh * pen; b.z -= nu * pen;
+  const vn = (b.vx * ux + b.vy * uy) * nh - b.vz * nu;
+  if (vn >= 0) return 0;
+  const k = 1 + (hC > 0 ? 0.12 : 0.3);
+  b.vx -= k * vn * nh * ux; b.vy -= k * vn * nh * uy; b.vz += k * vn * nu;
+  return -vn;
+}
+
 function physics(dt) {
   const L = game.level, b = game.ball;
   const sens = SENS[store.settings.sens] ?? 1;
   const ax = G_BASE * sens * tilt.x, ay = G_BASE * sens * tilt.y;
   const sp0 = Math.hypot(b.vx, b.vy);
-  const sub = clamp(Math.ceil((sp0 * dt) / (BALL_R * 0.35)), 1, 16);
+  let sub = clamp(Math.ceil((sp0 * dt) / (BALL_R * 0.35)), 1, 16);
+  const reach = L.goal.r + BALL_R + sp0 * dt + 4;
+  for (let i = -1; i < L.holes.length; i++) {
+    const ho = i < 0 ? L.goal : L.holes[i];
+    if (Math.abs(ho.x - b.x) < reach && Math.abs(ho.y - b.y) < reach) { sub = Math.max(sub, 8); break; }
+  }
   const h = dt / sub;
-  let impact = 0;
+  let impact = 0, impWall = 0, rimImpact = 0;
   for (let s = 0; s < sub; s++) {
-    b.vx += ax * h; b.vy += ay * h;
-    const sp = Math.hypot(b.vx, b.vy);
-    if (sp > 0) { const dec = Math.min(sp, ROLL_RES * h); b.vx -= (b.vx / sp) * dec; b.vy -= (b.vy / sp) * dec; }
+    b.vx += ax * h; b.vy += ay * h; b.vz += G_FALL * h;
+    if (b.z > -0.5) { // Rollwiderstand nur mit Bodenkontakt
+      const sp = Math.hypot(b.vx, b.vy);
+      if (sp > 0) { const dec = Math.min(sp, ROLL_RES * h); b.vx -= (b.vx / sp) * dec; b.vy -= (b.vy / sp) * dec; }
+    }
+    b.x += b.vx * h; b.y += b.vy * h; b.z += b.vz * h;
 
-    // Löcher: Sog am Rand, Fall ab der Mitte
+    // Liegt der Mittelpunkt über einer Bohrung, trägt nur noch die Lochkante
+    let over = null;
     for (let i = -1; i < L.holes.length; i++) {
       const ho = i < 0 ? L.goal : L.holes[i];
-      const dx = ho.x - b.x, dy = ho.y - b.y, d = Math.hypot(dx, dy);
-      if (d < ho.r) {
-        if (d < ho.r - BALL_R * 0.15) {
-          b.state = 'falling'; b.fallT = 0; b.fx = ho.x; b.fy = ho.y; b.toGoal = i < 0;
-          Sound.roll(0); if (i >= 0) Sound.drop(); return;
-        }
-        const pull = 6500 * (1 - d / ho.r) + 1600;
-        b.vx += (dx / d) * pull * h; b.vy += (dy / d) * pull * h;
+      const dx = ho.x - b.x, dy = ho.y - b.y;
+      if (dx * dx + dy * dy < ho.r * ho.r) { over = ho; break; }
+    }
+    b.over = over;
+    if (over) {
+      rimImpact = Math.max(rimImpact, holeContact(b, over));
+      if (b.z > BALL_R * 0.9) { // Mittelpunkt unter der Brettoberfläche: kein Zurück mehr
+        b.state = 'falling'; b.hole = over; b.toGoal = over === L.goal;
+        Sound.roll(0); Sound.rim(rimImpact);
+        return;
       }
+    } else if (b.z >= 0) {
+      if (b.vz > 260) rimImpact = Math.max(rimImpact, b.vz * 0.6); // kleiner Hüpfer landet wieder
+      b.z = 0; b.vz = 0;
     }
 
-    b.x += b.vx * h; b.y += b.vy * h;
-
-    for (const w of L.walls) {
+    for (let wi = 0; wi < L.walls.length; wi++) {
+      const w = L.walls[wi];
       const cx = clamp(b.x, w.x, w.x + w.w), cy = clamp(b.y, w.y, w.y + w.h);
       let dx = b.x - cx, dy = b.y - cy;
       const d2 = dx * dx + dy * dy;
@@ -724,7 +938,7 @@ function physics(dt) {
       b.x += nx * pen; b.y += ny * pen;
       const vn = b.vx * nx + b.vy * ny;
       if (vn < 0) {
-        impact = Math.max(impact, -vn);
+        if (-vn > impact) { impact = -vn; impWall = wi; }
         b.vx -= (1 + RESTITUTION) * vn * nx; b.vy -= (1 + RESTITUTION) * vn * ny;
         const tx = -ny, ty = nx, vt = b.vx * tx + b.vy * ty;
         b.vx -= vt * 0.03 * tx; b.vy -= vt * 0.03 * ty;
@@ -734,8 +948,9 @@ function physics(dt) {
   // Sicherheitsnetz: nie aus dem Labyrinth heraus
   b.x = clamp(b.x, L.ox + BALL_R, L.ox + L.mw - BALL_R);
   b.y = clamp(b.y, L.oy + BALL_R, L.oy + L.mh - BALL_R);
-  Sound.hit(impact);
-  Sound.roll(Math.hypot(b.vx, b.vy), dt);
+  Sound.hit(impact, impWall, L.walls[impWall] && L.walls[impWall].frame);
+  Sound.rim(rimImpact);
+  Sound.roll(b.z > -0.5 ? Math.hypot(b.vx, b.vy) : 0);
 
   if (store.settings.checkpoints) {
     const k = pathIndexAt(L, b.x, b.y);
@@ -744,6 +959,19 @@ function physics(dt) {
       game.cpReached++; Sound.checkpoint();
     }
   }
+}
+
+// Freier Fall durch die Bohrung: die Kugel kann noch an der Lochwand anschlagen
+function fallStep(dt) {
+  const b = game.ball, sub = 8, h = dt / sub;
+  let imp = 0;
+  for (let s = 0; s < sub; s++) {
+    b.vz += G_FALL * h;
+    b.x += b.vx * h; b.y += b.vy * h; b.z += b.vz * h;
+    imp = Math.max(imp, holeContact(b, b.hole));
+  }
+  Sound.rim(imp);
+  return b.z > GONE_Z;
 }
 
 let lastT = 0, hudT = 0;
@@ -774,13 +1002,13 @@ function frame(now) {
     game.time += dt;
     if (b.state === 'roll') physics(dt);
     else if (b.state === 'falling') {
-      b.fallT += dt;
-      if (b.fallT > FALL_T) {
+      if (fallStep(dt)) {
+        Sound.land();
         if (b.toGoal) { b.state = 'gone'; win(); }
         else {
-          b.state = 'gone'; b.fallT = 0; game.falls++; updateHud();
+          b.state = 'gone'; game.falls++; updateHud();
           if (game.falls >= MAX_FALLS) lose();
-          else { toast('Noch ein Versuch!', 1600); setTimeout(() => { if (game.mode === 'play' || game.mode === 'paused') respawn(); }, 250); }
+          else { toast('Noch ein Versuch!', 1600); setTimeout(() => { if (game.mode === 'play' || game.mode === 'paused') respawn(); }, 600); }
         }
       }
     } else if (b.state === 'held') {
@@ -896,5 +1124,5 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 }
 
 // für Tests
-window.__laby = { game, buildLevel, tilt, sensor, keys, startLevel, view };
+window.__laby = { game, buildLevel, tilt, sensor, keys, startLevel, view, Sound, makeWood };
 })();
