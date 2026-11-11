@@ -659,7 +659,6 @@ const Sound = (() => {
 
 // ============================================================ Neigungssensor
 const sensor = { ok: false, g: [0, 0, -1], samples: [] };
-let basis = null; // Bezugssystem nach dem Ausrichten
 const keys = { l: 0, r: 0, u: 0, d: 0 };
 
 window.addEventListener('deviceorientation', (e) => {
@@ -682,13 +681,8 @@ function makeBasis(g0) {
   const ey = norm([Y[0] - py * z[0] - qy * ex[0], Y[1] - py * z[1] - qy * ex[1], Y[2] - py * z[2] - qy * ex[2]]);
   return { ex, ey };
 }
-function calibrate() {
-  const sm = sensor.samples.slice(-12);
-  if (!sm.length) { basis = makeBasis([0, 0, -1]); return; }
-  const avg = [0, 0, 0];
-  sm.forEach((v) => { avg[0] += v[0]; avg[1] += v[1]; avg[2] += v[2]; });
-  basis = makeBasis(avg);
-}
+// Neutral ist das waagerecht liegende iPad: dann rollt die Kugel nicht
+const FLAT_BASIS = makeBasis([0, 0, -1]);
 function screenAngle() {
   if (typeof window.orientation === 'number') return window.orientation;
   if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
@@ -700,7 +694,7 @@ function readTilt() {
   if (keys.l || keys.r || keys.u || keys.d) {
     tx = (keys.r - keys.l) * 0.16; ty = (keys.d - keys.u) * 0.16;
   } else if (sensor.ok) {
-    const b = basis || makeBasis([0, 0, -1]);
+    const b = FLAT_BASIS;
     const dx = dot(sensor.g, b.ex);          // Gerät: nach rechts
     const dy = -dot(sensor.g, b.ey);         // Gerät: nach unten (Hochformat)
     const a = (screenAngle() + view.rot) * Math.PI / 180;
@@ -1311,7 +1305,7 @@ function frame(now) {
     if (game.cdT >= 0.6) {
       game.cdT -= 0.6; game.cdStep--;
       if (game.cdStep > 0) { setCd(String(game.cdStep)); Sound.tick(false); }
-      else if (game.cdStep === 0) { setCd('Los!'); Sound.tick(true); calibrate(); }
+      else if (game.cdStep === 0) { setCd('Los!'); Sound.tick(true); }
       else {
         $('#countdown').hidden = true; game.mode = 'play'; b.state = 'roll';
         if (!sensor.ok && !game.warnedSensor) {
@@ -1407,7 +1401,6 @@ $('#btnReset').addEventListener('click', () => {
 $('#btnPause').addEventListener('click', () => { if (game.mode === 'paused') resumeGame(); else pauseGame(); });
 $('#btnResume').addEventListener('click', resumeGame);
 $('#btnRestart').addEventListener('click', () => { requestMotion(); startLevel(game.n); });
-$('#btnCalib').addEventListener('click', () => { requestMotion(); resumeGame(); });
 $('#btnPauseLevels').addEventListener('click', () => openLevels('#scrPause'));
 $('#btnPauseMenu').addEventListener('click', goMenu);
 $('#btnNext').addEventListener('click', () => { requestMotion(); startLevel(game.n + 1); });

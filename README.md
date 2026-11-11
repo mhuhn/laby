@@ -17,7 +17,7 @@ Klassisches Kugellabyrinth aus Holz als PWA fürs iPad: Die Metallkugel wird dur
 ## Spielen
 
 Über GitHub Pages öffnen, in Safari „Teilen → Zum Home-Bildschirm“ wählen und beim ersten Start den Zugriff auf „Bewegung & Ausrichtung“ erlauben.
-Vor jedem Level gibt es einen kurzen Countdown: In dieser Zeit wird die aktuelle Haltung des iPads als „waagerecht“ übernommen.
+Neutral ist das waagerecht gehaltene iPad – dann bleibt die Kugel liegen, wie beim echten Brett.
 Die Ausrichtungssperre im Kontrollzentrum verhindert, dass sich der Bildschirm beim Neigen dreht.
 
 ## Dateien
