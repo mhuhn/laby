@@ -5,7 +5,7 @@
 // ============================================================ Konstanten
 const LEVEL_COUNT = 20;
 const H = 860;                                   // Brett-Höhe in Welt-Einheiten; Breite folgt dem Bildschirm
-const BALL_R = 14, HOLE_R = 20, WALL_T = 12;
+const BALL_R = 19.6, HOLE_R = 20, WALL_T = 12;          // Kugel 40 % größer als ursprünglich (14)
 const LINE_W = 9;                                // Strichstärke der aufgedruckten Linie (wie beim Holzlabyrinth)
 const ARROW_L = 30, ARROW_W = 30;                // Pfeilspitze am Ziel
 const FINISH_R = 26;                             // so nah muss die Kugel an die Pfeilspitze
