@@ -24,7 +24,7 @@ const MAX_FALLS = 2;                             // beim zweiten Loch ist das Le
 const G_FALL = 9000;                             // Fallbeschleunigung senkrecht zum Brett
 const GONE_Z = BALL_R + 46;                      // so tief unter dem Brett ist die Kugel nicht mehr zu sehen
 const TAU = Math.PI * 2;
-const MAX_TILT = Math.sin(28 * Math.PI / 180);
+const MAX_TILT = Math.sin(15 * Math.PI / 180);       // stärkere Neigung als 15° wirkt nicht stärker
 const STORE_KEY = 'laby.v1';
 
 const $ = (s) => document.querySelector(s);
