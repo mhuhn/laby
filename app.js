@@ -12,7 +12,7 @@ const ARROW_L = ARROW_F + ARROW_B;
 const TAIL_L = 22, TAIL_W = 36, TAIL_NOTCH = 5;   // Fiederung am Linienanfang (Schwalbenschwanz)
 const HOLE_GAP = 6;                              // Spalt Loch–Leiste, durch den die Kugel nicht passt
 const START_AHEAD = 46;                          // Kugel startet so weit vor dem Linienanfang
-const FINISH_R = 26;                             // so nah muss die Kugel an die Pfeilspitze
+const FINISH_R = 26;                             // Ersatz-Zielkreis um die Pfeilspitze, falls sich kein Zielbereich abgrenzen lässt
 const INK = 'rgba(48,40,34,.96)';                // Druckfarbe
 const FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif';
 const CLASSIC_LEVEL = 7, CLASSIC_BAR = 32, CLASSIC_HOLE_R = 28;   // Maße wie beim Original       // nachgebautes klassisches Holzlabyrinth
@@ -269,6 +269,7 @@ function finishLevel(L) {
     L.checkpoints = [0.28, 0.53, 0.77].map((f) => { const q = L.samples[Math.round(f * (tot - 1))]; return { x: q.x, y: q.y }; });
   }
   L.checkpoints.forEach((cp) => { cp.k = nearestSample(L, cp.x, cp.y); });
+  L.finishZone = finishZone(L);
   return L;
 }
 
@@ -324,6 +325,52 @@ function closeHoleGaps(L) {
 }
 
 // Kommt die Kugel überhaupt vom Start ins Ziel?
+// Zielbereich: alles hinter der Ziellinie (quer zum Pfeil am Fuß der Pfeilspitze), soweit es von Leisten umschlossen ist.
+// Dort zählt die Kugel als angekommen – sie muss nicht genau die Spitze treffen.
+function finishZone(L) {
+  const G = 6, gw = Math.ceil(L.W / G), gh = Math.ceil(L.H / G), n = gw * gh, free = new Uint8Array(n).fill(1), rr = BALL_R - 1;
+  for (const w of L.walls) for (let gy = Math.max(0, Math.floor((w.y - rr) / G)); gy <= Math.min(gh - 1, Math.ceil((w.y + w.h + rr) / G)); gy++)
+    for (let gx = Math.max(0, Math.floor((w.x - rr) / G)); gx <= Math.min(gw - 1, Math.ceil((w.x + w.w + rr) / G)); gx++) {
+      const x = (gx + 0.5) * G, y = (gy + 0.5) * G;
+      if (Math.hypot(Math.max(w.x - x, 0, x - w.x - w.w), Math.max(w.y - y, 0, y - w.y - w.h)) < rr) free[gy * gw + gx] = 0;
+    }
+  const inWall = (x, y) => x < 0 || y < 0 || x > L.W || y > L.H || L.walls.some((w) => x >= w.x && x <= w.x + w.w && y >= w.y && y <= w.y + w.h);
+  // Ziellinie von Leiste zu Leiste sperren
+  const d = L.arrowDir, nx = -d.y, ny = d.x, B = L.arrowBase;
+  for (const sg of [1, -1]) for (let t = 0; t < 400; t += 2) {
+    const x = B.x + nx * t * sg, y = B.y + ny * t * sg;
+    if (inWall(x, y)) break;
+    const gx = Math.floor(x / G), gy = Math.floor(y / G);
+    for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+      const cx = gx + ox, cy = gy + oy;
+      if (cx >= 0 && cy >= 0 && cx < gw && cy < gh && Math.hypot((cx + 0.5) * G - x, (cy + 0.5) * G - y) < G * 0.8) free[cy * gw + cx] = 0;
+    }
+  }
+  // von der Spitze aus füllen
+  const cell = (x, y) => clamp(Math.floor(y / G), 0, gh - 1) * gw + clamp(Math.floor(x / G), 0, gw - 1);
+  let c0 = cell(L.tip.x + d.x * 6, L.tip.y + d.y * 6);
+  if (!free[c0]) c0 = cell(L.tip.x, L.tip.y);
+  if (!free[c0]) return null;
+  const zone = new Uint8Array(n), q = [c0]; zone[c0] = 1;
+  for (let i = 0; i < q.length; i++) {
+    const c = q[i], x = c % gw, y = (c - x) / gw;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const ax = x + dx, ay = y + dy; if (ax < 0 || ay < 0 || ax >= gw || ay >= gh) continue;
+      const m = ay * gw + ax; if (!zone[m] && free[m]) { zone[m] = 1; q.push(m); }
+    }
+  }
+  // Ziellinie dicht? Sonst (Bereich läuft aus) nur der Kreis um die Spitze
+  if (zone[cell(L.start.x, L.start.y)] || q.length > n * 0.15) return null;
+  return { G, gw, gh, zone };
+}
+function inFinish(L, x, y) {
+  const Z = L.finishZone;
+  if (Math.hypot(x - L.finish.x, y - L.finish.y) < FINISH_R) return true;
+  if (!Z) return false;
+  const gx = Math.floor(x / Z.G), gy = Math.floor(y / Z.G);
+  return gx >= 0 && gy >= 0 && gx < Z.gw && gy < Z.gh && Z.zone[gy * Z.gw + gx] === 1;
+}
+
 function routeOpen(L) {
   const G = 6, gw = Math.ceil(L.W / G), gh = Math.ceil(L.H / G), n = gw * gh, free = new Uint8Array(n).fill(1), rr = BALL_R - 1;
   for (const w of L.walls) for (let gy = Math.max(0, Math.floor((w.y - rr) / G)); gy <= Math.min(gh - 1, Math.ceil((w.y + w.h + rr) / G)); gy++)
@@ -1267,7 +1314,7 @@ function physics(dt) {
 
   checkCheckpoints(L, b);
   // Ziel: Kugel erreicht die Pfeilspitze – zählt nur, wenn alle Zwischenziele erreicht sind
-  if (b.z <= 0.5 && Math.hypot(b.x - L.finish.x, b.y - L.finish.y) < FINISH_R) {
+  if (b.z <= 0.5 && inFinish(L, b.x, b.y)) {
     const missing = game.cpDone.filter((d) => !d).length;
     if (!missing) { b.state = 'done'; Sound.roll(0); win(); }
     else if (game.hintT <= 0) {
