@@ -12,7 +12,6 @@ const ARROW_L = ARROW_F + ARROW_B;
 const TAIL_L = 22, TAIL_W = 36, TAIL_NOTCH = 5;   // Fiederung am Linienanfang (Schwalbenschwanz)
 const HOLE_GAP = 6;                              // Spalt Loch–Leiste, durch den die Kugel nicht passt
 const START_AHEAD = 46;                          // Kugel startet so weit vor dem Linienanfang
-const GATE_STEP = 40, GATE_REACH = 170;          // Kontrollpunkte gegen Abkürzungen
 const FINISH_R = 26;                             // so nah muss die Kugel an die Pfeilspitze
 const INK = 'rgba(48,40,34,.96)';                // Druckfarbe
 const FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif';
@@ -270,7 +269,6 @@ function finishLevel(L) {
     L.checkpoints = [0.28, 0.53, 0.77].map((f) => { const q = L.samples[Math.round(f * (tot - 1))]; return { x: q.x, y: q.y }; });
   }
   L.checkpoints.forEach((cp) => { cp.k = nearestSample(L, cp.x, cp.y); });
-  L.gates = shortcutGates(L);
   return L;
 }
 
@@ -354,69 +352,6 @@ function nearestSample(L, x, y, from = 0, to = L.samples.length) {
   let bi = from, bd = Infinity;
   for (let i = from; i < to; i++) { const q = L.samples[i], d = (q.x - x) ** 2 + (q.y - y) ** 2; if (d < bd) { bd = d; bi = i; } }
   return bi;
-}
-
-// ---- Kontrollpunkte gegen Abkürzungen
-// Jede Stelle der freien Fläche gehört zum nächstgelegenen Punkt der Linie (gemessen auf dem Weg, den die Kugel rollen kann).
-// So hat die Kugel überall einen „Fortschritt“ entlang der Linie. Rollt sie normal, wächst er stetig; nimmt sie eine
-// Abkürzung, springt er weit nach vorn. Ein Kontrollpunkt kommt überall dorthin, wo man ein Stück der Strecke umgehen kann.
-const GATE_BAND = 12;                             // halbe Breite des gesperrten Streckenstücks (Linienpunkte à 8 Einheiten)
-const GATE_JUMP = 24;                             // größter Fortschrittssprung, der noch als normales Rollen gilt
-function shortcutGates(L) {
-  const G = 6, gw = Math.ceil(L.W / G), gh = Math.ceil(L.H / G), n = gw * gh;
-  const free = new Uint8Array(n).fill(1);
-  const block = (x0, y0, x1, y1, test) => {
-    for (let gy = Math.max(0, Math.floor(y0 / G)); gy <= Math.min(gh - 1, Math.ceil(y1 / G)); gy++)
-      for (let gx = Math.max(0, Math.floor(x0 / G)); gx <= Math.min(gw - 1, Math.ceil(x1 / G)); gx++)
-        if (test((gx + 0.5) * G, (gy + 0.5) * G)) free[gy * gw + gx] = 0;
-  };
-  // Mittelpunkt der Kugel kann nicht näher als ihr Radius an eine Leiste; über einem Loch fällt sie
-  const rr = BALL_R - 1;
-  L.walls.forEach((w) => block(w.x - rr, w.y - rr, w.x + w.w + rr, w.y + w.h + rr, (x, y) =>
-    Math.hypot(Math.max(w.x - x, 0, x - w.x - w.w), Math.max(w.y - y, 0, y - w.y - w.h)) < rr));
-  L.holes.forEach((h) => { const hr = h.r - 6; block(h.x - hr, h.y - hr, h.x + hr, h.y + hr, (x, y) => Math.hypot(x - h.x, y - h.y) < hr); });
-  const cellOf = (p) => clamp(Math.floor(p.y / G), 0, gh - 1) * gw + clamp(Math.floor(p.x / G), 0, gw - 1);
-  // Fortschritt je Zelle: Breitensuche von allen Linienpunkten gleichzeitig
-  const label = new Int32Array(n).fill(-1), queue = new Int32Array(n);
-  let qh = 0, qt = 0;
-  L.samples.forEach((q, i) => { const c = cellOf(q); if (free[c] && label[c] < 0) { label[c] = i; queue[qt++] = c; } });
-  const D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  while (qh < qt) {
-    const c = queue[qh++], x = c % gw, y = (c - x) / gw;
-    for (const [dx, dy] of D4) {
-      const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
-      const m = ny * gw + nx; if (free[m] && label[m] < 0) { label[m] = label[c]; queue[qt++] = m; }
-    }
-  }
-  L.progress = { G, gw, gh, label };
-  const sC = cellOf(L.start), fC = cellOf(L.finish);
-  const reachableWithout = (lo, hi) => {
-    const seen = new Uint8Array(n); let h0 = 0, t0 = 0;
-    if (!free[sC]) return false;
-    queue[t0++] = sC; seen[sC] = 1;
-    while (h0 < t0) {
-      const c = queue[h0++]; if (c === fC) return true;
-      const x = c % gw, y = (c - x) / gw;
-      for (const [dx, dy] of D4) {
-        const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
-        const m = ny * gw + nx, lb = label[m];
-        if (!seen[m] && free[m] && !(lb >= lo && lb <= hi)) { seen[m] = 1; queue[t0++] = m; }
-      }
-    }
-    return false;
-  };
-  const S = L.samples, gates = [], every = Math.round(GATE_STEP / 8);
-  const k0 = label[sC] < 0 ? 0 : label[sC] + GATE_BAND + 2, k1 = S.length - GATE_BAND - 3;
-  for (let k = k0; k < k1; k += every) {
-    if (reachableWithout(k - GATE_BAND, k + GATE_BAND)) gates.push({ k, x: S[k].x, y: S[k].y });
-  }
-  return gates;
-}
-function progressAt(L, x, y) {
-  const P = L.progress; if (!P) return -1;
-  const gx = Math.floor(x / P.G), gy = Math.floor(y / P.G);
-  if (gx < 0 || gy < 0 || gx >= P.gw || gy >= P.gh) return -1;
-  return P.label[gy * P.gw + gx];
 }
 
 function buildLevel(n, aspect = 1.43) {
@@ -1056,12 +991,15 @@ function render() {
   ctx.setTransform(view.scale * view.dpr, 0, 0, view.scale * view.dpr, view.ox * view.dpr, view.oy * view.dpr);
 
   // Zwischenziele
-  if (store.settings.checkpoints) L.checkpoints.forEach((p, i) => drawCheckpoint(ctx, p, i < game.cpReached));
-  // Hinweis auf die ausgelassene Stelle
-  if (game.hintT > 0 && game.hintPos) {
+  L.checkpoints.forEach((p, i) => drawCheckpoint(ctx, p, !!game.cpDone[i]));
+  // Hinweis auf ausgelassene Zwischenziele
+  if (game.hintT > 0) {
     const ph = (Math.sin(performance.now() / 120) + 1) / 2;
-    ctx.beginPath(); ctx.arc(game.hintPos.x, game.hintPos.y, 16 + ph * 10, 0, TAU);
-    ctx.lineWidth = 4; ctx.strokeStyle = `rgba(200,60,30,${0.5 + ph * 0.45})`; ctx.stroke();
+    L.checkpoints.forEach((p, i) => {
+      if (game.cpDone[i]) return;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 16 + ph * 10, 0, TAU);
+      ctx.lineWidth = 4; ctx.strokeStyle = `rgba(200,60,30,${0.5 + ph * 0.45})`; ctx.stroke();
+    });
   }
 
   // Lackglanz, der beim Neigen über das Brett wandert
@@ -1151,7 +1089,7 @@ const game = {
   mode: 'menu', // menu | countdown | play | paused | won
   n: 1, base: null, level: null,
   ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, state: 'held', heldT: 0, hole: null, over: null },
-  time: 0, falls: 0, cpReached: 0, seq: [], seqIdx: 0, hintT: 0, hintGate: null, cdT: 0, cdStep: 0, cdThen: 'play',
+  time: 0, falls: 0, cpDone: [], cpLast: -1, hintT: 0, cdT: 0, cdStep: 0, cdThen: 'play',
 };
 
 function startLevel(n) {
@@ -1159,8 +1097,8 @@ function startLevel(n) {
   game.n = n;
   game.base = buildLevel(n, stageAspect());
   game.level = game.base;
-  game.time = 0; game.falls = 0; game.cpReached = 0; game.seqIdx = 0; game.hintT = 0; game.hintGate = null; game.prog = -1;
-  game.seq = buildSequence(game.level || game.base);
+  game.time = 0; game.falls = 0; game.hintT = 0;
+  game.cpDone = (game.level || game.base).checkpoints.map(() => false); game.cpLast = -1;
   showScreen(null);
   $('#hud').hidden = false; $('#btnRotate').hidden = true;
   $('#barTitle').textContent = `Level ${n}`;
@@ -1171,33 +1109,19 @@ function startLevel(n) {
   requestWake();
 }
 
-// Reihenfolge, in der Kontrollpunkte (unsichtbar) und Zwischenziele passiert werden müssen
-function buildSequence(L) {
-  const items = L.gates.map((g) => ({ type: 'gate', k: g.k, g }));
-  if (store.settings.checkpoints) L.checkpoints.forEach((cp, i) => items.push({ type: 'cp', k: cp.k, cp, i }));
-  return items.sort((a, b) => a.k - b.k);
-}
-function advanceSequence(L, prev, cur) {
-  const p = progressAt(L, cur.x, cur.y);
-  const last = game.prog;
-  if (p >= 0) game.prog = p;
-  for (let guard = 0; guard < 4 && game.seqIdx < game.seq.length; guard++) {
-    const it = game.seq[game.seqIdx];
-    if (it.type === 'gate') {
-      // stetig über die Stelle gerollt (kein großer Sprung = keine Abkürzung)
-      if (p < 0 || last < 0 || Math.abs(p - last) > GATE_JUMP || Math.min(p, last) > it.k || Math.max(p, last) < it.k) break;
-    } else if (Math.hypot(cur.x - it.cp.x, cur.y - it.cp.y) < Math.max(30, L.cell * 0.4)) {
-      game.cpReached = it.i + 1; Sound.checkpoint();
-    } else break;
-    game.seqIdx++;
-    if (game.hintGate === it.g) game.hintT = 0;
-  }
+// Zwischenziele: müssen alle erreicht werden, egal in welcher Reihenfolge und auf welchem Weg.
+// Eine Abkürzung ist also nur dann ein Problem, wenn man dabei ein Zwischenziel auslässt.
+function checkCheckpoints(L, b) {
+  L.checkpoints.forEach((cp, i) => {
+    if (!game.cpDone[i] && Math.hypot(b.x - cp.x, b.y - cp.y) < Math.max(30, L.cell * 0.4)) {
+      game.cpDone[i] = true; game.cpLast = i; Sound.checkpoint();
+    }
+  });
 }
 
 function placeBall(p) {
   const b = game.ball;
   b.x = p.x; b.y = p.y; b.z = 0; b.vx = 0; b.vy = 0; b.vz = 0; b.state = 'held'; b.heldT = 0; b.hole = null; b.over = null;
-  game.prog = -1;                                // nach dem Versetzen kein Fortschrittssprung
 }
 
 function startCountdown() {
@@ -1223,7 +1147,7 @@ function resumeGame() {
 function respawn() {
   const L = game.level;
   let p = L.start;
-  if (store.settings.checkpoints && game.cpReached > 0) p = L.checkpoints[game.cpReached - 1];
+  if (store.settings.checkpoints && game.cpLast >= 0) p = L.checkpoints[game.cpLast];
   placeBall(p);
 }
 
@@ -1274,7 +1198,7 @@ function holeContact(b, ho) {
 }
 
 function physics(dt) {
-  const L = game.level, b = game.ball, prevPos = { x: b.x, y: b.y };
+  const L = game.level, b = game.ball;
   const sens = SENS[store.settings.sens] ?? 1;
   const ax = G_BASE * sens * tilt.x, ay = G_BASE * sens * tilt.y;
   const sp0 = Math.hypot(b.vx, b.vy);
@@ -1347,15 +1271,14 @@ function physics(dt) {
   Sound.rim(rimImpact);
   Sound.roll(b.z > -0.5 ? Math.hypot(b.vx, b.vy) : 0);
 
-  advanceSequence(L, prevPos, b);
-  // Ziel: Kugel erreicht die Pfeilspitze – zählt aber nur, wenn nichts abgekürzt wurde
+  checkCheckpoints(L, b);
+  // Ziel: Kugel erreicht die Pfeilspitze – zählt nur, wenn alle Zwischenziele erreicht sind
   if (b.z <= 0.5 && Math.hypot(b.x - L.finish.x, b.y - L.finish.y) < FINISH_R) {
-    if (game.seqIdx >= game.seq.length) { b.state = 'done'; Sound.roll(0); win(); }
+    const missing = game.cpDone.filter((d) => !d).length;
+    if (!missing) { b.state = 'done'; Sound.roll(0); win(); }
     else if (game.hintT <= 0) {
-      const it = game.seq.slice(game.seqIdx).find((s) => s.type === 'gate') || game.seq[game.seqIdx];
-      game.hintGate = it.g || null; game.hintPos = it.g ? { x: it.g.x, y: it.g.y } : { x: it.cp.x, y: it.cp.y };
       game.hintT = 4;
-      toast('Abgekürzt! Rolle zurück und nimm den Weg entlang der Linie – die blinkende Stelle fehlt noch.', 4000);
+      toast(missing === 1 ? 'Ein Zwischenziel fehlt noch – es blinkt.' : `Es fehlen noch ${missing} Zwischenziele – sie blinken.`, 4000);
     }
   }
 }
@@ -1521,5 +1444,5 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 }
 
 // für Tests
-window.__laby = { game, buildLevel, buildClassic, finishLevel, shortcutGates, closeHoleGaps, tilt, sensor, keys, startLevel, view, Sound, makeWood };
+window.__laby = { game, buildLevel, buildClassic, finishLevel, closeHoleGaps, tilt, sensor, keys, startLevel, view, Sound, makeWood };
 })();
