@@ -6,6 +6,8 @@ Klassisches Kugellabyrinth aus Holz als PWA fürs iPad: Die Metallkugel wird dur
 - Level 7 ist ein originalgetreu vermessenes klassisches Holzlabyrinth (Leisten, Löcher, Linie und Nummern vom Foto übernommen)
 - Aufdruck wie beim Holzlabyrinth: kräftige Linie mit runden Bögen, Lochnummern, START mit Haken, ZIEL mit Pfeil
 - Zwei Löcher pro Level, dann ist das Spiel vorbei
+- Abkürzungen zählen nicht: unsichtbare Kontrollpunkte an allen umgehbaren Stellen, das Ziel zählt erst, wenn alle der Reihe nach passiert sind
+- Zwischen Loch und direkt daneben liegender Leiste passt die Kugel nicht durch
 - Leitlinie mit nummerierten Zwischenzielen; nach einem Fall wahlweise zurück zum letzten Zwischenziel oder zum Start
 - Bestzeiten und freigeschaltete Level werden lokal gespeichert
 - Immer im Querformat, läuft offline (Service Worker)

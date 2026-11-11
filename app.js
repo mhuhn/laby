@@ -5,13 +5,18 @@
 // ============================================================ Konstanten
 const LEVEL_COUNT = 20;
 const H = 860;                                   // Brett-Höhe in Welt-Einheiten; Breite folgt dem Bildschirm
-const BALL_R = 19.6, HOLE_R = 20, WALL_T = 12;          // Kugel 40 % größer als ursprünglich (14)
+const BALL_R = 19.6, HOLE_R = 26, WALL_T = 12;          // Kugel 40 % größer als ursprünglich (14)
 const LINE_W = 9;                                // Strichstärke der aufgedruckten Linie (wie beim Holzlabyrinth)
-const ARROW_L = 30, ARROW_W = 30;                // Pfeilspitze am Ziel
+const ARROW_F = 19, ARROW_B = 7, ARROW_W = 24;    // Pfeilspitze: Länge vorn, Widerhaken hinten, Breite
+const ARROW_L = ARROW_F + ARROW_B;
+const TAIL_L = 22, TAIL_W = 36, TAIL_NOTCH = 5;   // Fiederung am Linienanfang (Schwalbenschwanz)
+const HOLE_GAP = 6;                              // Spalt Loch–Leiste, durch den die Kugel nicht passt
+const START_AHEAD = 46;                          // Kugel startet so weit vor dem Linienanfang
+const GATE_STEP = 40, GATE_REACH = 170;          // Kontrollpunkte gegen Abkürzungen
 const FINISH_R = 26;                             // so nah muss die Kugel an die Pfeilspitze
 const INK = 'rgba(48,40,34,.96)';                // Druckfarbe
 const FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif';
-const CLASSIC_LEVEL = 7, CLASSIC_BAR = 26;       // nachgebautes klassisches Holzlabyrinth
+const CLASSIC_LEVEL = 7, CLASSIC_BAR = 32, CLASSIC_HOLE_R = 28;   // Maße wie beim Original       // nachgebautes klassisches Holzlabyrinth
 const G_BASE = 7200;                             // Beschleunigung bei 90° Neigung
 const SENS = [0.62, 1, 1.5];
 const ROLL_RES = 70;                             // Rollwiderstand (Einheiten/s²)
@@ -57,7 +62,7 @@ function shuffle(arr, rng) {
 // Die Bahnen werden schnell schmaler: ab Level 9 das engste Raster (Felder ca. 100 Einheiten)
 const TABLE = [[5, 3, 1], [6, 4, 3], [7, 5, 6], [8, 5, 9], [9, 6, 12], [10, 7, 16], [11, 7, 20], [11, 8, 24], [12, 8, 27]];
 function levelConfig(n) { return n <= TABLE.length ? TABLE[n - 1] : [12, 8, 27 + (n - TABLE.length) * 3]; }
-const MIN_CELL = 100;
+const MIN_CELL = 130;                            // Platz für Loch + Kugel nebeneinander
 
 const N = 1, E = 2, S = 4, Wd = 8;
 const DIRS = [ // dc, dr, Bit, Gegenbit
@@ -84,14 +89,12 @@ function buildClassic(aspect) {
     const x0 = a <= 0.001 ? 0 : X(a), x1 = b >= 0.999 ? W : X(b);
     walls.push({ x: x0, y: Y(v) - BT / 2, w: x1 - x0, h: BT });
   });
-  const pathPts = C.line.map(([u, v]) => ({ x: X(u), y: Y(v) }));
-  const st = pathPts[C.startIdx];
+  const pathPts = C.line.slice(C.startIdx).map(([u, v]) => ({ x: X(u), y: Y(v) }));
   return {
     n: CLASSIC_LEVEL, classic: true, W, H, aspect, cell: 120,
     ox: T / 2, oy: T / 2, mw: W - T, mh: H - T,
-    walls, holes: C.holes.map(([u, v]) => ({ x: X(u), y: Y(v), r: HOLE_R })),
-    pathPts, startIdx: C.startIdx, tip: { x: X(C.tip[0]), y: Y(C.tip[1]) },
-    start: { x: st.x, y: st.y },
+    walls, holes: C.holes.map(([u, v]) => ({ x: X(u), y: Y(v), r: CLASSIC_HOLE_R })),
+    pathPts, tip: { x: X(C.tip[0]), y: Y(C.tip[1]) },
     labels: C.labels.map(([t, u, v]) => ({ text: t, x: X(u), y: Y(v), size: 22, weight: 600, angle: 0 })),
     startText: { text: 'START', x: X(C.startText[0]), y: Y(C.startText[1]), angle: 0 },
     finishText: { text: 'ZIEL', x: X(C.finishText[0]), y: Y(C.finishText[1]), angle: Math.PI / 2 },
@@ -168,18 +171,11 @@ function clearance(L, pts, placed) {
 // gemeinsame Aufbereitung: Linie, Haken, Pfeil, Nummern, START/ZIEL, Zwischenziele
 function finishLevel(L) {
   if (!L.pathPts) {
-    const wp = L.waypoints, d = unit(wp[1].x - wp[0].x, wp[1].y - wp[0].y);
-    // Haken am Anfang wie beim Holzlabyrinth – zur freieren Seite
-    const hook = [-1, 1].map((sg) => {
-      const a = sg * 63 * Math.PI / 180, bx = -d.x, by = -d.y;
-      return { x: wp[0].x + (bx * Math.cos(a) - by * Math.sin(a)) * 24, y: wp[0].y + (bx * Math.sin(a) + by * Math.cos(a)) * 24 };
-    });
-    L.samples = [];
-    const hk = clearance(L, [hook[1]], []) > clearance(L, [hook[0]], []) ? hook[1] : hook[0];
-    L.pathPts = [hk, ...filletPath(wp, Math.min(L.cell * 0.42, 70))];
-    L.startIdx = 1;
+    const wp = L.waypoints;
+    L.pathPts = filletPath(wp, Math.min(L.cell * 0.42, 70));
     L.tip = { x: wp[wp.length - 1].x, y: wp[wp.length - 1].y };
   }
+  L.startIdx = 0;
   const P = L.pathPts;
   // Linie endet am Pfeilfuß
   const pe = P[Math.max(0, P.length - 6)];
@@ -188,14 +184,18 @@ function finishLevel(L) {
   L.arrowDir = endDir;
   if (!L.classic) {
     let k = P.length - 1;
-    while (k > L.startIdx + 1 && Math.hypot(P[k].x - L.tip.x, P[k].y - L.tip.y) < ARROW_L) k--;
+    while (k > 1 && Math.hypot(P[k].x - L.tip.x, P[k].y - L.tip.y) < ARROW_L) k--;
     L.linePts = [...P.slice(0, k + 1), L.arrowBase];
   } else {
     L.linePts = P;
   }
   L.samples = resample(L.linePts, 8);
+  // Kugel startet ein Stück vor der Fiederung auf der Linie
+  const sk = Math.min(L.samples.length - 1, Math.round(START_AHEAD / 8));
+  L.start = { x: L.samples[sk].x, y: L.samples[sk].y };
   L.finish = { x: L.tip.x, y: L.tip.y };
-  if (!L.waypoints) L.waypoints = resample(P.slice(L.startIdx), 28).concat([{ x: L.tip.x, y: L.tip.y }]);
+  if (!L.waypoints) L.waypoints = resample(P, 28).concat([{ x: L.tip.x, y: L.tip.y }]);
+  closeHoleGaps(L);
 
   const placed = [];
   const place = (cands, text, size, weight, spacing) => {
@@ -212,7 +212,7 @@ function finishLevel(L) {
 
   // START und ZIEL entlang der Linie
   if (!L.startText) {
-    const s0 = P[L.startIdx], k1 = Math.min(P.length - 1, L.startIdx + 6);
+    const s0 = P[0], k1 = Math.min(P.length - 1, 6);
     const d = unit(P[k1].x - s0.x, P[k1].y - s0.y), nrm = { x: -d.y, y: d.x }, a = readable(Math.atan2(d.y, d.x));
     const sz = textSize('START', 21, 600, 1.5), cands = [];
     for (const along of [0.7, 1.0, 1.4]) for (const side of [-1, 1]) {
@@ -235,6 +235,21 @@ function finishLevel(L) {
     L.finishText = { ...L.finishText, size: 21, weight: 600, spacing: 1.5 };
   }
 
+  // Klassiker: Nummern, die ein vergrößertes oder verschobenes Loch berühren, etwas zur Seite setzen
+  if (L.classic) {
+    L.labels = L.labels.map((t) => {
+      const sz = textSize(t.text, t.size, t.weight);
+      const hit = (x, y) => L.holes.some((h) => Math.hypot(h.x - x, h.y - y) < h.r + Math.max(sz.w, sz.h) / 2 + 3);
+      if (!hit(t.x, t.y)) return t;
+      const cands = [];
+      for (const r of [14, 24, 36, 50]) for (let j = 0; j < 12; j++) {
+        const a = j * Math.PI / 6, x = t.x + Math.cos(a) * r, y = t.y + Math.sin(a) * r;
+        if (!hit(x, y)) cands.push({ x, y, angle: 0, bonus: -r / 10 });
+      }
+      return cands.length ? place(cands, t.text, t.size, t.weight, 0) : t;
+    });
+  }
+
   // Lochnummern in Wegrichtung
   if (!L.labels) {
     const prog = (h) => { let bi = 0, bd = Infinity; L.samples.forEach((q, i) => { const dd = Math.hypot(q.x - h.x, q.y - h.y); if (dd < bd) { bd = dd; bi = i; } }); return bi; };
@@ -254,7 +269,154 @@ function finishLevel(L) {
     const tot = L.samples.length;
     L.checkpoints = [0.28, 0.53, 0.77].map((f) => { const q = L.samples[Math.round(f * (tot - 1))]; return { x: q.x, y: q.y }; });
   }
+  L.checkpoints.forEach((cp) => { cp.k = nearestSample(L, cp.x, cp.y); });
+  L.gates = shortcutGates(L);
   return L;
+}
+
+// Liegt ein Loch so nah an einer Leiste, dass die Kugel gerade noch dazwischen durchpassen würde, und führt die Linie
+// nicht durch diesen Spalt, rückt das Loch an die Leiste heran (oder wird etwas größer): Der Spalt wird schmaler als die Kugel.
+function closeHoleGaps(L) {
+  const gapTo = (h, w) => {
+    const x = clamp(h.x, w.x, w.x + w.w), y = clamp(h.y, w.y, w.y + w.h), dx = x - h.x, dy = y - h.y, d = Math.hypot(dx, dy);
+    return { g: d - h.r, ux: d ? dx / d : 0, uy: d ? dy / d : 0, d, w };
+  };
+  const lineThrough = (h, o) => {
+    const ax = h.x + o.ux * h.r, ay = h.y + o.uy * h.r, g = Math.max(o.g, 1);
+    return L.samples.some((q) => {
+      const t = ((q.x - ax) * o.ux + (q.y - ay) * o.uy) / g;
+      return t > -0.1 && t < 1.1 && Math.abs((q.x - ax) * -o.uy + (q.y - ay) * o.ux) < 28;
+    });
+  };
+  const valid = (h) => L.walls.every((w) => gapTo(h, w).g >= HOLE_GAP - 0.5)
+    && L.holes.every((o) => o === h || Math.hypot(o.x - h.x, o.y - h.y) >= o.r + h.r + 4)
+    && L.samples.every((q) => Math.hypot(q.x - h.x, q.y - h.y) >= h.r + LINE_W / 2 + 4)
+    && Math.hypot(h.x - L.start.x, h.y - L.start.y) > h.r + BALL_R + 10;
+  const open = (h) => L.walls.map((w) => gapTo(h, w))
+    .filter((o) => o.d > 1e-6 && o.g > 13 && o.g <= 2 * BALL_R + 14 && !lineThrough(h, o));   // ≤ 13: Kugel hängt über dem Loch und fällt
+  for (const h of L.holes) {
+    for (let it = 0; it < 4; it++) {
+      const gaps = open(h); if (!gaps.length) break;
+      const base = { x: h.x, y: h.y, r: h.r }, cands = [];
+      for (const o of gaps) {
+        const m = o.g - HOLE_GAP;
+        cands.push({ x: base.x + o.ux * m, y: base.y + o.uy * m, r: base.r });                       // ans Holz rücken
+        cands.push({ x: base.x + o.ux * m / 2, y: base.y + o.uy * m / 2, r: base.r + m / 2 });       // größer + etwas näher
+        const near = L.walls.map((w) => gapTo(h, w)).filter((x) => x.d > 1e-6 && x.g <= 2 * BALL_R + 14);
+        for (const o2 of near) if (o2.w !== o.w && o.ux * o2.ux + o.uy * o2.uy < -0.7) {           // zwischen zwei Leisten: mittig und größer
+          const r = Math.min(46, base.r + (o.g + o2.g) / 2 - HOLE_GAP), sh = (o.g - o2.g) / 2;
+          cands.push({ x: base.x + o.ux * sh, y: base.y + o.uy * sh, r });
+        }
+      }
+      let best = null;
+      for (const c of cands) {
+        if (c.r > 46) continue;
+        Object.assign(h, c);
+        if (valid(h)) {
+          const score = open(h).length * 1000 + Math.hypot(c.x - base.x, c.y - base.y) + (c.r - base.r) * 2;
+          if (score < gaps.length * 1000 && (!best || score < best.score)) best = { ...c, score };
+        }
+        Object.assign(h, base);
+      }
+      if (!best) break;
+      h.x = best.x; h.y = best.y; h.r = best.r;
+      if (!routeOpen(L)) { Object.assign(h, base); break; }   // die Strecke selbst muss befahrbar bleiben
+    }
+  }
+}
+
+// Kommt die Kugel überhaupt vom Start ins Ziel?
+function routeOpen(L) {
+  const G = 6, gw = Math.ceil(L.W / G), gh = Math.ceil(L.H / G), n = gw * gh, free = new Uint8Array(n).fill(1), rr = BALL_R - 1;
+  for (const w of L.walls) for (let gy = Math.max(0, Math.floor((w.y - rr) / G)); gy <= Math.min(gh - 1, Math.ceil((w.y + w.h + rr) / G)); gy++)
+    for (let gx = Math.max(0, Math.floor((w.x - rr) / G)); gx <= Math.min(gw - 1, Math.ceil((w.x + w.w + rr) / G)); gx++) {
+      const x = (gx + 0.5) * G, y = (gy + 0.5) * G;
+      if (Math.hypot(Math.max(w.x - x, 0, x - w.x - w.w), Math.max(w.y - y, 0, y - w.y - w.h)) < rr) free[gy * gw + gx] = 0;
+    }
+  for (const h of L.holes) { const hr = h.r - 6;
+    for (let gy = Math.max(0, Math.floor((h.y - hr) / G)); gy <= Math.min(gh - 1, Math.ceil((h.y + hr) / G)); gy++)
+      for (let gx = Math.max(0, Math.floor((h.x - hr) / G)); gx <= Math.min(gw - 1, Math.ceil((h.x + hr) / G)); gx++)
+        if (Math.hypot((gx + 0.5) * G - h.x, (gy + 0.5) * G - h.y) < hr) free[gy * gw + gx] = 0; }
+  const cell = (p) => clamp(Math.floor(p.y / G), 0, gh - 1) * gw + clamp(Math.floor(p.x / G), 0, gw - 1);
+  const s0 = cell(L.start), f0 = cell(L.finish), seen = new Uint8Array(n), q = [s0]; seen[s0] = 1;
+  for (let i = 0; i < q.length; i++) {
+    const c = q[i]; if (c === f0) return true;
+    const x = c % gw, y = (c - x) / gw;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+      const m = ny * gw + nx; if (!seen[m] && free[m]) { seen[m] = 1; q.push(m); }
+    }
+  }
+  return false;
+}
+
+function nearestSample(L, x, y, from = 0, to = L.samples.length) {
+  let bi = from, bd = Infinity;
+  for (let i = from; i < to; i++) { const q = L.samples[i], d = (q.x - x) ** 2 + (q.y - y) ** 2; if (d < bd) { bd = d; bi = i; } }
+  return bi;
+}
+
+// ---- Kontrollpunkte gegen Abkürzungen
+// Jede Stelle der freien Fläche gehört zum nächstgelegenen Punkt der Linie (gemessen auf dem Weg, den die Kugel rollen kann).
+// So hat die Kugel überall einen „Fortschritt“ entlang der Linie. Rollt sie normal, wächst er stetig; nimmt sie eine
+// Abkürzung, springt er weit nach vorn. Ein Kontrollpunkt kommt überall dorthin, wo man ein Stück der Strecke umgehen kann.
+const GATE_BAND = 12;                             // halbe Breite des gesperrten Streckenstücks (Linienpunkte à 8 Einheiten)
+const GATE_JUMP = 24;                             // größter Fortschrittssprung, der noch als normales Rollen gilt
+function shortcutGates(L) {
+  const G = 6, gw = Math.ceil(L.W / G), gh = Math.ceil(L.H / G), n = gw * gh;
+  const free = new Uint8Array(n).fill(1);
+  const block = (x0, y0, x1, y1, test) => {
+    for (let gy = Math.max(0, Math.floor(y0 / G)); gy <= Math.min(gh - 1, Math.ceil(y1 / G)); gy++)
+      for (let gx = Math.max(0, Math.floor(x0 / G)); gx <= Math.min(gw - 1, Math.ceil(x1 / G)); gx++)
+        if (test((gx + 0.5) * G, (gy + 0.5) * G)) free[gy * gw + gx] = 0;
+  };
+  // Mittelpunkt der Kugel kann nicht näher als ihr Radius an eine Leiste; über einem Loch fällt sie
+  const rr = BALL_R - 1;
+  L.walls.forEach((w) => block(w.x - rr, w.y - rr, w.x + w.w + rr, w.y + w.h + rr, (x, y) =>
+    Math.hypot(Math.max(w.x - x, 0, x - w.x - w.w), Math.max(w.y - y, 0, y - w.y - w.h)) < rr));
+  L.holes.forEach((h) => { const hr = h.r - 6; block(h.x - hr, h.y - hr, h.x + hr, h.y + hr, (x, y) => Math.hypot(x - h.x, y - h.y) < hr); });
+  const cellOf = (p) => clamp(Math.floor(p.y / G), 0, gh - 1) * gw + clamp(Math.floor(p.x / G), 0, gw - 1);
+  // Fortschritt je Zelle: Breitensuche von allen Linienpunkten gleichzeitig
+  const label = new Int32Array(n).fill(-1), queue = new Int32Array(n);
+  let qh = 0, qt = 0;
+  L.samples.forEach((q, i) => { const c = cellOf(q); if (free[c] && label[c] < 0) { label[c] = i; queue[qt++] = c; } });
+  const D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  while (qh < qt) {
+    const c = queue[qh++], x = c % gw, y = (c - x) / gw;
+    for (const [dx, dy] of D4) {
+      const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+      const m = ny * gw + nx; if (free[m] && label[m] < 0) { label[m] = label[c]; queue[qt++] = m; }
+    }
+  }
+  L.progress = { G, gw, gh, label };
+  const sC = cellOf(L.start), fC = cellOf(L.finish);
+  const reachableWithout = (lo, hi) => {
+    const seen = new Uint8Array(n); let h0 = 0, t0 = 0;
+    if (!free[sC]) return false;
+    queue[t0++] = sC; seen[sC] = 1;
+    while (h0 < t0) {
+      const c = queue[h0++]; if (c === fC) return true;
+      const x = c % gw, y = (c - x) / gw;
+      for (const [dx, dy] of D4) {
+        const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+        const m = ny * gw + nx, lb = label[m];
+        if (!seen[m] && free[m] && !(lb >= lo && lb <= hi)) { seen[m] = 1; queue[t0++] = m; }
+      }
+    }
+    return false;
+  };
+  const S = L.samples, gates = [], every = Math.round(GATE_STEP / 8);
+  const k0 = label[sC] < 0 ? 0 : label[sC] + GATE_BAND + 2, k1 = S.length - GATE_BAND - 3;
+  for (let k = k0; k < k1; k += every) {
+    if (reachableWithout(k - GATE_BAND, k + GATE_BAND)) gates.push({ k, x: S[k].x, y: S[k].y });
+  }
+  return gates;
+}
+function progressAt(L, x, y) {
+  const P = L.progress; if (!P) return -1;
+  const gx = Math.floor(x / P.G), gy = Math.floor(y / P.G);
+  if (gx < 0 || gy < 0 || gx >= P.gw || gy >= P.gh) return -1;
+  return P.label[gy * P.gw + gx];
 }
 
 function buildLevel(n, aspect = 1.43) {
@@ -324,7 +486,7 @@ function buildLevel(n, aspect = 1.43) {
   const difficulty = 0.25 + 0.75 * (n - 1) / (LEVEL_COUNT - 1);
   const holes = [];
   const waypoints = path.map((c) => ({ x: cellX(c) + cw / 2, y: cellY(c) + ch / 2 }));
-  const minOff = WALL_T / 2 + HOLE_R + 4;
+  const minOff = WALL_T / 2 + HOLE_R + HOLE_GAP;
   const candidates = shuffle(path.slice(2, -2).map((c) => pathIndex[c]), rng);
   const chosen = new Set(candidates.slice(0, holeTarget));
 
@@ -338,7 +500,7 @@ function buildLevel(n, aspect = 1.43) {
       const side = rng() < 0.5 ? -1 : 1;
       const P = ix !== 0 ? ch : cw, A = ix !== 0 ? cw : ch; // quer / längs zum Gang
       const maxOff = Math.min(P - WALL_T / 2 - (2 * BALL_R + 16) - HOLE_R, P / 2);
-      const off = minOff + rng() * difficulty * Math.max(0, maxOff - minOff);
+      const off = Math.min(maxOff, minOff + rng() * difficulty * 7);   // Spalt bleibt kleiner als die Kugel
       const along = (rng() - 0.5) * A * 0.25;
       const gapMid = (off + HOLE_R + P - WALL_T / 2) / 2; // Mitte der freien Gasse
       if (ix !== 0) { // waagerechter Gang
@@ -357,7 +519,7 @@ function buildLevel(n, aspect = 1.43) {
       waypoints[k].x += sx * cw * 0.12;
       waypoints[k].y += sy * ch * 0.12;
       if (!chosen.has(k)) continue;
-      const off = minOff + rng() * difficulty * Math.min(18, cell * 0.12);
+      const off = minOff + rng() * difficulty * 6;
       // Loch in die Außenecke – dort, wo der Schwung hinträgt
       const hx = sx > 0 ? x0 + off : x0 + cw - off;
       const hy = sy > 0 ? y0 + off : y0 + ch - off;
@@ -436,7 +598,7 @@ const Sound = (() => {
     ctx = testCtx || new AC(); lastHit = -1; lastRim = -1;
     master = ctx.createGain(); master.gain.value = store.settings.sound ? 1 : 0;
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -12; comp.ratio.value = 5; comp.attack.value = 0.002; comp.release.value = 0.15;
+    comp.threshold.value = -6; comp.ratio.value = 3; comp.attack.value = 0.002; comp.release.value = 0.15;   // nur Spitzen abfangen, Dynamik erhalten
     master.connect(comp); comp.connect(ctx.destination);
 
     const sr = ctx.sampleRate;
@@ -464,12 +626,12 @@ const Sound = (() => {
     rollGain = ctx.createGain(); rollGain.gain.value = 0;
     rollSrc.connect(hp);
     // Resonanzen von Brett und Kasten
-    [[150, 2.5, 1.0], [310, 4, 0.8], [640, 5, 0.5], [1250, 4, 0.3], [2400, 3, 0.14]].forEach(([f, q, g]) => {
+    [[140, 2.5, 1.0], [290, 4, 0.75], [600, 5, 0.32], [1150, 4, 0.08], [2200, 3, 0.02]].forEach(([f, q, g]) => {
       const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = f; bp.Q.value = q;
       const gg = ctx.createGain(); gg.gain.value = g;
       hp.connect(bp); bp.connect(gg); gg.connect(rollLP);
     });
-    const direct = ctx.createGain(); direct.gain.value = 0.2; hp.connect(direct); direct.connect(rollLP);
+    const direct = ctx.createGain(); direct.gain.value = 0.06; hp.connect(direct); direct.connect(rollLP);
     rollLP.connect(rollGain); rollGain.connect(master);
     rollSrc.start();
   }
@@ -479,9 +641,9 @@ const Sound = (() => {
     if (!ctx) return;
     const t = ctx.currentTime, v = Math.min(speed / 1500, 1);
     // langsam wie bisher, schnell deutlich gedeckelt (Sättigung statt weiter ansteigender Lautstärke)
-    rollGain.gain.setTargetAtTime(speed < 6 ? 0 : 0.15 * Math.tanh(speed / 500), t, 0.03);
-    rollSrc.playbackRate.setTargetAtTime(clamp(speed / 520, 0.06, 2.4), t, 0.04);
-    rollLP.frequency.setTargetAtTime(700 + v * 2000, t, 0.05);
+    rollGain.gain.setTargetAtTime(speed < 6 ? 0 : 0.08 * Math.tanh(speed / 450), t, 0.03);
+    rollSrc.playbackRate.setTargetAtTime(clamp(speed / 600, 0.05, 1.5), t, 0.04);
+    rollLP.frequency.setTargetAtTime(420 + v * 600, t, 0.05);       // dumpf: höchstens gut 1 kHz
   }
 
   // eine gedämpfte Eigenschwingung
@@ -505,10 +667,11 @@ const Sound = (() => {
 
   // Stahlkugel gegen Holzleiste; jede Leiste hat ihre eigene Tonhöhe, der Rahmen klingt tiefer
   function hit(impact, wallIdx = 0, frame = false) {
-    if (!ctx || impact < 45) return;
+    if (!ctx || impact < 25) return;
     const now = ctx.currentTime;
     if (now - lastHit < 0.03) return; lastHit = now;
-    const v = Math.min(impact / 1300, 1), amp = 0.8 * Math.pow(v, 0.8);
+    // leise beim sanften Anlehnen, laut beim schnellen Aufprall (steile Kurve, ca. 40 dB Unterschied)
+    const v = Math.min(impact / 1200, 1), amp = 0.9 * Math.pow(v, 1.7);
     const seed = frac(Math.sin((wallIdx + 1) * 12.9898) * 43758.5453);
     const f0 = (frame ? 290 + seed * 90 : 430 + seed * 330) * (0.985 + Math.random() * 0.03);
     const long = frame ? 1.4 : 1;
@@ -771,16 +934,28 @@ function renderStatic() {
   // Aufdruck (die Maserung scheint durch): Linie mit Haken, Pfeil, START/ZIEL, Lochnummern
   c.save(); c.globalCompositeOperation = 'multiply';
   c.strokeStyle = INK; c.fillStyle = INK; c.lineWidth = LINE_W; c.lineCap = 'butt'; c.lineJoin = 'round';
-  const lp = L.linePts;
-  c.beginPath(); c.moveTo(lp[0].x, lp[0].y);
-  for (let i = 1; i < lp.length; i++) c.lineTo(lp[i].x, lp[i].y);
+  const lp = L.linePts, S0 = lp[0];
+  const trimmed = resample(lp, 4); let k0 = 0;
+  while (k0 < trimmed.length - 1 && Math.hypot(trimmed[k0].x - S0.x, trimmed[k0].y - S0.y) < TAIL_L * 0.6) k0++;
+  c.beginPath(); c.moveTo(trimmed[k0].x, trimmed[k0].y);
+  for (let i = k0 + 1; i < trimmed.length; i++) c.lineTo(trimmed[i].x, trimmed[i].y);
+  c.lineTo(L.arrowBase.x + L.arrowDir.x * 3, L.arrowBase.y + L.arrowDir.y * 3);
   c.stroke();
-  const ad = L.arrowDir, an = { x: -ad.y, y: ad.x }, ab = L.arrowBase;
+  // Fiederung (Schwalbenschwanz) am Linienanfang
+  let td = { x: 0, y: 0 };
+  { let k = 1; while (k < trimmed.length - 1 && Math.hypot(trimmed[k].x - S0.x, trimmed[k].y - S0.y) < TAIL_L) k++; td = unit(trimmed[k].x - S0.x, trimmed[k].y - S0.y); }
+  const tn = { x: -td.y, y: td.x }, at = (al, sd) => ({ x: S0.x + td.x * al + tn.x * sd, y: S0.y + td.y * al + tn.y * sd });
   c.beginPath();
-  c.moveTo(L.tip.x, L.tip.y);
-  c.lineTo(ab.x + an.x * ARROW_W / 2 - ad.x * 2, ab.y + an.y * ARROW_W / 2 - ad.y * 2);
-  c.lineTo(ab.x + ad.x * 6, ab.y + ad.y * 6);
-  c.lineTo(ab.x - an.x * ARROW_W / 2 - ad.x * 2, ab.y - an.y * ARROW_W / 2 - ad.y * 2);
+  let q = at(TAIL_L, LINE_W / 2); c.moveTo(q.x, q.y);
+  let cq = at(TAIL_L * 0.35, LINE_W / 2 + 2.5); q = at(0, TAIL_W / 2); c.quadraticCurveTo(cq.x, cq.y, q.x, q.y);
+  q = at(TAIL_NOTCH, 0); c.lineTo(q.x, q.y);
+  q = at(0, -TAIL_W / 2); c.lineTo(q.x, q.y);
+  cq = at(TAIL_L * 0.35, -LINE_W / 2 - 2.5); q = at(TAIL_L, -LINE_W / 2); c.quadraticCurveTo(cq.x, cq.y, q.x, q.y);
+  c.closePath(); c.fill();
+  // Pfeilspitze: kurz aufgeweitet, dann spitz zulaufend
+  const ad = L.arrowDir, an = { x: -ad.y, y: ad.x }, T0 = L.tip, ap = (al, sd) => ({ x: T0.x - ad.x * al + an.x * sd, y: T0.y - ad.y * al + an.y * sd });
+  c.beginPath();
+  [ap(0, 0), ap(ARROW_F, ARROW_W / 2), ap(ARROW_L, LINE_W / 2), ap(ARROW_L, -LINE_W / 2), ap(ARROW_F, -ARROW_W / 2)].forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)));
   c.closePath(); c.fill();
   [L.startText, L.finishText, ...L.labels].forEach((t) => printText(c, t));
   c.restore();
@@ -882,6 +1057,12 @@ function render() {
 
   // Zwischenziele
   if (store.settings.checkpoints) L.checkpoints.forEach((p, i) => drawCheckpoint(ctx, p, i < game.cpReached));
+  // Hinweis auf die ausgelassene Stelle
+  if (game.hintT > 0 && game.hintPos) {
+    const ph = (Math.sin(performance.now() / 120) + 1) / 2;
+    ctx.beginPath(); ctx.arc(game.hintPos.x, game.hintPos.y, 16 + ph * 10, 0, TAU);
+    ctx.lineWidth = 4; ctx.strokeStyle = `rgba(200,60,30,${0.5 + ph * 0.45})`; ctx.stroke();
+  }
 
   // Lackglanz, der beim Neigen über das Brett wandert
   const gx = L.W * (0.4 - tilt.x * 1.2), gy = L.H * (0.32 - tilt.y * 1.2);
@@ -970,7 +1151,7 @@ const game = {
   mode: 'menu', // menu | countdown | play | paused | won
   n: 1, base: null, level: null,
   ball: { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, state: 'held', heldT: 0, hole: null, over: null },
-  time: 0, falls: 0, cpReached: 0, cdT: 0, cdStep: 0, cdThen: 'play',
+  time: 0, falls: 0, cpReached: 0, seq: [], seqIdx: 0, hintT: 0, hintGate: null, cdT: 0, cdStep: 0, cdThen: 'play',
 };
 
 function startLevel(n) {
@@ -978,7 +1159,8 @@ function startLevel(n) {
   game.n = n;
   game.base = buildLevel(n, stageAspect());
   game.level = game.base;
-  game.time = 0; game.falls = 0; game.cpReached = 0;
+  game.time = 0; game.falls = 0; game.cpReached = 0; game.seqIdx = 0; game.hintT = 0; game.hintGate = null; game.prog = -1;
+  game.seq = buildSequence(game.level || game.base);
   showScreen(null);
   $('#hud').hidden = false; $('#btnRotate').hidden = true;
   $('#barTitle').textContent = `Level ${n}`;
@@ -989,9 +1171,33 @@ function startLevel(n) {
   requestWake();
 }
 
+// Reihenfolge, in der Kontrollpunkte (unsichtbar) und Zwischenziele passiert werden müssen
+function buildSequence(L) {
+  const items = L.gates.map((g) => ({ type: 'gate', k: g.k, g }));
+  if (store.settings.checkpoints) L.checkpoints.forEach((cp, i) => items.push({ type: 'cp', k: cp.k, cp, i }));
+  return items.sort((a, b) => a.k - b.k);
+}
+function advanceSequence(L, prev, cur) {
+  const p = progressAt(L, cur.x, cur.y);
+  const last = game.prog;
+  if (p >= 0) game.prog = p;
+  for (let guard = 0; guard < 4 && game.seqIdx < game.seq.length; guard++) {
+    const it = game.seq[game.seqIdx];
+    if (it.type === 'gate') {
+      // stetig über die Stelle gerollt (kein großer Sprung = keine Abkürzung)
+      if (p < 0 || last < 0 || Math.abs(p - last) > GATE_JUMP || Math.min(p, last) > it.k || Math.max(p, last) < it.k) break;
+    } else if (Math.hypot(cur.x - it.cp.x, cur.y - it.cp.y) < Math.max(30, L.cell * 0.4)) {
+      game.cpReached = it.i + 1; Sound.checkpoint();
+    } else break;
+    game.seqIdx++;
+    if (game.hintGate === it.g) game.hintT = 0;
+  }
+}
+
 function placeBall(p) {
   const b = game.ball;
   b.x = p.x; b.y = p.y; b.z = 0; b.vx = 0; b.vy = 0; b.vz = 0; b.state = 'held'; b.heldT = 0; b.hole = null; b.over = null;
+  game.prog = -1;                                // nach dem Versetzen kein Fortschrittssprung
 }
 
 function startCountdown() {
@@ -1068,12 +1274,12 @@ function holeContact(b, ho) {
 }
 
 function physics(dt) {
-  const L = game.level, b = game.ball;
+  const L = game.level, b = game.ball, prevPos = { x: b.x, y: b.y };
   const sens = SENS[store.settings.sens] ?? 1;
   const ax = G_BASE * sens * tilt.x, ay = G_BASE * sens * tilt.y;
   const sp0 = Math.hypot(b.vx, b.vy);
   let sub = clamp(Math.ceil((sp0 * dt) / (BALL_R * 0.35)), 1, 16);
-  const reach = HOLE_R + BALL_R + sp0 * dt + 4;
+  const reach = 40 + BALL_R + sp0 * dt + 4;
   for (let i = 0; i < L.holes.length; i++) {
     const ho = L.holes[i];
     if (Math.abs(ho.x - b.x) < reach && Math.abs(ho.y - b.y) < reach) { sub = Math.max(sub, 8); break; }
@@ -1141,15 +1347,16 @@ function physics(dt) {
   Sound.rim(rimImpact);
   Sound.roll(b.z > -0.5 ? Math.hypot(b.vx, b.vy) : 0);
 
-  if (store.settings.checkpoints) {
-    const next = L.checkpoints[game.cpReached];
-    if (next && Math.hypot(b.x - next.x, b.y - next.y) < Math.max(30, L.cell * 0.4)) {
-      game.cpReached++; Sound.checkpoint();
-    }
-  }
-  // Ziel: Kugel erreicht die Pfeilspitze
+  advanceSequence(L, prevPos, b);
+  // Ziel: Kugel erreicht die Pfeilspitze – zählt aber nur, wenn nichts abgekürzt wurde
   if (b.z <= 0.5 && Math.hypot(b.x - L.finish.x, b.y - L.finish.y) < FINISH_R) {
-    b.state = 'done'; Sound.roll(0); win();
+    if (game.seqIdx >= game.seq.length) { b.state = 'done'; Sound.roll(0); win(); }
+    else if (game.hintT <= 0) {
+      const it = game.seq.slice(game.seqIdx).find((s) => s.type === 'gate') || game.seq[game.seqIdx];
+      game.hintGate = it.g || null; game.hintPos = it.g ? { x: it.g.x, y: it.g.y } : { x: it.cp.x, y: it.cp.y };
+      game.hintT = 4;
+      toast('Abgekürzt! Rolle zurück und nimm den Weg entlang der Linie – die blinkende Stelle fehlt noch.', 4000);
+    }
   }
 }
 
@@ -1203,6 +1410,7 @@ function frame(now) {
     } else if (b.state === 'held') {
       b.heldT += dt; if (b.heldT > 0.55) b.state = 'roll';
     }
+    if (game.hintT > 0) game.hintT -= dt;
     hudT += dt; if (hudT > 0.1) { hudT = 0; updateHud(); }
   }
   render();
@@ -1313,5 +1521,5 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
 }
 
 // für Tests
-window.__laby = { game, buildLevel, tilt, sensor, keys, startLevel, view, Sound, makeWood };
+window.__laby = { game, buildLevel, buildClassic, finishLevel, shortcutGates, closeHoleGaps, tilt, sensor, keys, startLevel, view, Sound, makeWood };
 })();
