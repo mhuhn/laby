@@ -61,7 +61,8 @@ function shuffle(arr, rng) {
 // Die Bahnen werden schnell schmaler: ab Level 9 das engste Raster (Felder ca. 100 Einheiten)
 const TABLE = [[5, 3, 1], [6, 4, 3], [7, 5, 6], [8, 5, 9], [9, 6, 12], [10, 7, 16], [11, 7, 20], [11, 8, 24], [12, 8, 27]];
 function levelConfig(n) { return n <= TABLE.length ? TABLE[n - 1] : [12, 8, 27 + (n - TABLE.length) * 3]; }
-const MIN_CELL = 130;                            // Platz für Loch + Kugel nebeneinander
+const MIN_CELL = 140;                            // Platz für dicke Leiste + Loch + Kugel nebeneinander
+const INNER_T = 32;                              // innere Leisten so dick wie im Klassiker
 
 const N = 1, E = 2, S = 4, Wd = 8;
 const DIRS = [ // dc, dr, Bit, Gegenbit
@@ -238,7 +239,8 @@ function finishLevel(L) {
   if (L.classic) {
     L.labels = L.labels.map((t) => {
       const sz = textSize(t.text, t.size, t.weight);
-      const hit = (x, y) => L.holes.some((h) => Math.hypot(h.x - x, h.y - y) < h.r + Math.max(sz.w, sz.h) / 2 + 3);
+      const hit = (x, y) => L.holes.some((h) => Math.hypot(h.x - x, h.y - y) < h.r + Math.max(sz.w, sz.h) / 2 + 3)
+        || L.walls.some((w) => Math.hypot(Math.max(w.x - x, 0, x - w.x - w.w), Math.max(w.y - y, 0, y - w.y - w.h)) < Math.max(sz.w, sz.h) / 2 + 3);
       if (!hit(t.x, t.y)) return t;
       const cands = [];
       for (const r of [14, 24, 36, 50]) for (let j = 0; j < 12; j++) {
@@ -251,7 +253,15 @@ function finishLevel(L) {
 
   // Lochnummern in Wegrichtung
   if (!L.labels) {
-    const prog = (h) => { let bi = 0, bd = Infinity; L.samples.forEach((q, i) => { const dd = Math.hypot(q.x - h.x, q.y - h.y); if (dd < bd) { bd = dd; bi = i; } }); return bi; };
+    const blocked = (a, b) => L.walls.some((w) => { // Strecke a–b schneidet eine Leiste?
+      for (let t = 0.05; t < 1; t += 0.05) { const x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t; if (x > w.x && x < w.x + w.w && y > w.y && y < w.y + w.h) return true; }
+      return false;
+    });
+    const prog = (h) => {
+      const order = L.samples.map((q, i) => ({ i, d: Math.hypot(q.x - h.x, q.y - h.y) })).sort((a, b) => a.d - b.d);
+      const hit = order.slice(0, 60).find((o) => !blocked(h, L.samples[o.i]));
+      return (hit || order[0]).i;
+    };
     const order = L.holes.map((h) => ({ h, k: prog(h) })).sort((a, b) => a.k - b.k);
     L.labels = order.map(({ h }, i) => {
       const text = String(i + 1), sz = textSize(text, 20, 600), cands = [];
@@ -291,40 +301,100 @@ function closeHoleGaps(L) {
     && L.holes.every((o) => o === h || Math.hypot(o.x - h.x, o.y - h.y) >= o.r + h.r + 4)
     && L.samples.every((q) => Math.hypot(q.x - h.x, q.y - h.y) >= h.r + LINE_W / 2 + 4)
     && Math.hypot(h.x - L.start.x, h.y - L.start.y) > h.r + BALL_R + 10;
+  // Änderungen als Liste [Objekt, Eigenschaft, neuer Wert]; zurücknehmbar
+  const apply = (ops) => { const old = ops.map(([o, k]) => [o, k, o[k]]); ops.forEach(([o, k, v]) => { o[k] = v; }); return () => old.forEach(([o, k, v]) => { o[k] = v; }); };
+  // eine verschobene Leiste darf kein Loch zudecken und der Linie nicht näher kommen als nötig
+  const lineDist = (w) => Math.min(...L.samples.map((q) => Math.hypot(Math.max(w.x - q.x, 0, q.x - w.x - w.w), Math.max(w.y - q.y, 0, q.y - w.y - w.h))));
+  const wallOk = (w, before) => L.holes.every((o) => gapTo(o, w).g >= HOLE_GAP - 0.5) && lineDist(w) >= Math.min(before, BALL_R + 4)
+    && Math.hypot(Math.max(w.x - L.start.x, 0, L.start.x - w.x - w.w), Math.max(w.y - L.start.y, 0, L.start.y - w.y - w.h)) > BALL_R + 4;
   const open = (h) => L.walls.map((w) => gapTo(h, w))
     .filter((o) => o.d > 1e-6 && o.g > 13 && o.g <= 2 * BALL_R + 14 && !lineThrough(h, o));   // ≤ 13: Kugel hängt über dem Loch und fällt
-  for (const h of L.holes) {
+  const openAll = () => L.holes.reduce((n, o) => n + open(o).length, 0);
+  const holeLimit = L.classic ? 50 : Infinity;
+  const holeMoveOps = (h, o) => { const m = o.g - HOLE_GAP; return m <= holeLimit ? [[h, 'x', h.x + o.ux * m], [h, 'y', h.y + o.uy * m]] : null; };
+  // nach einer Leistenänderung: Löcher, deren Spalt zu dieser Leiste dadurch aufgeht, gleich mit heranrücken
+  const follow = (w, except) => {
+    const ops = [];
+    for (const o2 of L.holes) {
+      if (o2 === except) continue;
+      const og = open(o2).find((x) => x.w === w);
+      if (og) { const mo = holeMoveOps(o2, og); if (!mo) return null; ops.push(...mo); }
+    }
+    return ops;
+  };
+  const wallCands = (h, o) => {
+    const out = [], w = o.w; if (w.frame) return out;
+    const before = lineDist(w);
+    const tryOps = (mk, costF) => {
+      for (let t = 1; t <= 80; t++) {
+        const undo = apply(mk(t)); const ok = gapTo(h, w).g <= HOLE_GAP + 0.9;
+        if (ok) { const f = follow(w, h); undo(); out.push({ ops: mk(t), wall: w, before, cost: costF(t) }); if (f && f.length) out.push({ ops: [...mk(t), ...f], wall: w, before, cost: costF(t) + f.length * 10 }); return; }
+        undo();
+      }
+    };
+    // quer verschieben
+    for (const ax of ['x', 'y']) {
+      const u = ax === 'x' ? o.ux : o.uy; if (Math.abs(u) < 0.3) continue;
+      const v0 = w[ax], sg = -Math.sign(u); tryOps((t) => [[w, ax, v0 + sg * t]], (t) => t);
+    }
+    // in Längsrichtung verlängern (Leistenende zum Loch hin)
+    const vert = w.h > w.w, ul = vert ? o.uy : o.ux;
+    if (Math.abs(ul) >= 0.3) {
+      const pk = vert ? 'y' : 'x', sk = vert ? 'h' : 'w', p0 = w[pk], s0 = w[sk];
+      if (ul < 0) tryOps((t) => [[w, sk, s0 + t]], (t) => t * 1.5);
+      else tryOps((t) => [[w, pk, p0 - t], [w, sk, s0 + t]], (t) => t * 1.5);
+    }
+    return out;
+  };
+  for (let pass = 0; pass < 4; pass++) for (const h of L.holes) {
     for (let it = 0; it < 4; it++) {
       const gaps = open(h); if (!gaps.length) break;
-      const base = { x: h.x, y: h.y, r: h.r }, cands = [];
+      const total0 = openAll(), cands = [];
       for (const o of gaps) {
-        const m = o.g - HOLE_GAP;
-        cands.push({ x: base.x + o.ux * m, y: base.y + o.uy * m, r: base.r });                       // ans Holz rücken
-        cands.push({ x: base.x + o.ux * m / 2, y: base.y + o.uy * m / 2, r: base.r + m / 2 });       // größer + etwas näher
-        const near = L.walls.map((w) => gapTo(h, w)).filter((x) => x.d > 1e-6 && x.g <= 2 * BALL_R + 14);
-        for (const o2 of near) if (o2.w !== o.w && o.ux * o2.ux + o.uy * o2.uy < -0.7) {           // zwischen zwei Leisten: mittig und größer
-          const r = Math.min(46, base.r + (o.g + o2.g) / 2 - HOLE_GAP), sh = (o.g - o2.g) / 2;
-          cands.push({ x: base.x + o.ux * sh, y: base.y + o.uy * sh, r });
+        const hm = holeMoveOps(h, o);
+        if (hm) {
+          cands.push({ ops: hm, cost: (o.g - HOLE_GAP) * (L.classic ? 3 : 1) });
+          // Loch rückt heran, die Leiste auf der anderen Seite rückt mit
+          const closedBefore = new Set(L.walls.filter((w) => !open(h).some((x) => x.w === w)));
+          const u0 = apply(hm), extra = [];
+          let ok = true, wl = null, bf = 0;
+          for (const og of open(h)) {
+            if (!closedBefore.has(og.w)) continue;
+            const wc = wallCands(h, og).find((c) => { const u = apply(c.ops); const good = wallOk(c.wall, c.before) && valid(h); u(); return good; });
+            if (!wc) { ok = false; break; }
+            extra.push(...wc.ops); wl = wc.wall; bf = wc.before;
+          }
+          u0();
+          if (ok && extra.length) cands.push({ ops: [...hm, ...extra], wall: wl, before: bf, cost: (o.g - HOLE_GAP) * (L.classic ? 3 : 1) + 20 });
+        }
+        cands.push(...wallCands(h, o));
+        // Loch zwischen zwei Leisten: beide Leisten heranrücken (Loch bleibt, wo es ist)
+        const near = L.walls.map((w) => gapTo(h, w)).filter((x) => x.d > 1e-6 && !x.w.frame && x.w !== o.w && x.g <= 2 * BALL_R + 14 && o.ux * x.ux + o.uy * x.uy < -0.7);
+        for (const o2 of near) for (const c1 of wallCands(h, o)) {
+          const u1 = apply(c1.ops);
+          const o2now = gapTo(h, o2.w);
+          const c2s = o2now.g > HOLE_GAP + 1 ? wallCands(h, o2now) : [{ ops: [], cost: 0 }];
+          u1();
+          for (const c2 of c2s) cands.push({ ops: [...c1.ops, ...c2.ops], wall: c1.wall, before: c1.before, wall2: c2.wall, before2: c2.before, cost: c1.cost + c2.cost });
         }
       }
       let best = null;
       for (const c of cands) {
-        if (c.r > 46) continue;
-        Object.assign(h, c);
-        if (valid(h)) {
-          const score = open(h).length * 1000 + Math.hypot(c.x - base.x, c.y - base.y) + (c.r - base.r) * 2;
-          if (score < gaps.length * 1000 && (!best || score < best.score)) best = { ...c, score };
+        const undo = apply(c.ops);
+        const moved = [...new Set(c.ops.map(([ob]) => ob).filter((ob) => L.holes.includes(ob)))];
+        if (moved.every(valid) && valid(h) && (!c.wall || wallOk(c.wall, c.before)) && (!c.wall2 || wallOk(c.wall2, c.before2))) {
+          const score = openAll() * 1000 + c.cost;
+          if (score < total0 * 1000 && (!best || score < best.score)) best = { ...c, score };
         }
-        Object.assign(h, base);
+        undo();
       }
       if (!best) break;
-      h.x = best.x; h.y = best.y; h.r = best.r;
-      if (!routeOpen(L)) { Object.assign(h, base); break; }   // die Strecke selbst muss befahrbar bleiben
+      const undo = apply(best.ops);
+      if (!routeOpen(L)) { undo(); break; }   // die Strecke selbst muss befahrbar bleiben
     }
   }
 }
 
-// Kommt die Kugel überhaupt vom Start ins Ziel?
 // Zielbereich: alles hinter der Ziellinie (quer zum Pfeil am Fuß der Pfeilspitze), soweit es von Leisten umschlossen ist.
 // Dort zählt die Kugel als angekommen – sie muss nicht genau die Spitze treffen.
 function finishZone(L) {
@@ -371,6 +441,7 @@ function inFinish(L, x, y) {
   return gx >= 0 && gy >= 0 && gx < Z.gw && gy < Z.gh && Z.zone[gy * Z.gw + gx] === 1;
 }
 
+// Kommt die Kugel überhaupt vom Start ins Ziel?
 function routeOpen(L) {
   const G = 6, gw = Math.ceil(L.W / G), gh = Math.ceil(L.H / G), n = gw * gh, free = new Uint8Array(n).fill(1), rr = BALL_R - 1;
   for (const w of L.walls) for (let gy = Math.max(0, Math.floor((w.y - rr) / G)); gy <= Math.min(gh - 1, Math.ceil((w.y + w.h + rr) / G)); gy++)
@@ -416,47 +487,31 @@ function buildLevel(n, aspect = 1.43) {
   const id = (c, r) => r * cols + c;
   const cr = (i) => [i % cols, Math.floor(i / cols)];
 
-  // --- Irrgarten (Backtracker)
-  const seen = new Uint8Array(total);
-  const stack = [Math.floor(rng() * total)];
-  seen[stack[0]] = 1;
-  while (stack.length) {
-    const cur = stack[stack.length - 1];
-    const [c, r] = cr(cur);
-    const opts = [];
-    for (const d of DIRS) {
-      const nc = c + d[0], nr = r + d[1];
-      if (nc >= 0 && nr >= 0 && nc < cols && nr < rows && !seen[id(nc, nr)]) opts.push(d);
-    }
-    if (!opts.length) { stack.pop(); continue; }
-    const d = opts[Math.floor(rng() * opts.length)];
-    const nxt = id(c + d[0], r + d[1]);
-    open[cur] |= d[2]; open[nxt] |= d[3];
-    seen[nxt] = 1; stack.push(nxt);
+  // --- Weg durch alle Felder: zufälliger Hamiltonweg (Schlangenlinie, dann viele „Backbite“-Züge)
+  //     So deckt die Pfeillinie das ganze Brett ab – keine großen Bereiche ohne Linie.
+  let path = [];
+  for (let r = 0; r < rows; r++) for (let k = 0; k < cols; k++) path.push(id(r % 2 ? cols - 1 - k : k, r));
+  const nbrs = (i) => {
+    const [c, r] = cr(i), o = [];
+    for (const d of DIRS) { const nc = c + d[0], nr = r + d[1]; if (nc >= 0 && nr >= 0 && nc < cols && nr < rows) o.push(id(nc, nr)); }
+    return o;
+  };
+  const pos = new Int32Array(total);
+  const reindex = () => path.forEach((c, k) => { pos[c] = k; });
+  reindex();
+  for (let m = 0; m < total * 80; m++) {
+    if (rng() < 0.5) { path.reverse(); reindex(); }
+    const end = path[path.length - 1], cand = nbrs(end).filter((u) => u !== path[path.length - 2]);
+    if (!cand.length) continue;
+    const i = pos[cand[Math.floor(rng() * cand.length)]];
+    path = path.slice(0, i + 1).concat(path.slice(i + 1).reverse());
+    reindex();
   }
-
-  // --- längster Weg (zweimal Breitensuche)
-  function bfs(from) {
-    const dist = new Int32Array(total).fill(-1), prev = new Int32Array(total).fill(-1);
-    const q = [from]; dist[from] = 0; let far = from;
-    for (let qi = 0; qi < q.length; qi++) {
-      const cur = q[qi]; const [c, r] = cr(cur);
-      if (dist[cur] > dist[far]) far = cur;
-      for (const d of DIRS) {
-        if (!(open[cur] & d[2])) continue;
-        const nx = id(c + d[0], r + d[1]);
-        if (dist[nx] < 0) { dist[nx] = dist[cur] + 1; prev[nx] = cur; q.push(nx); }
-      }
-    }
-    return { far, prev };
+  for (let k = 0; k + 1 < path.length; k++) {
+    const [c, r] = cr(path[k]), [c2, r2] = cr(path[k + 1]);
+    const d = DIRS.find((d) => d[0] === c2 - c && d[1] === r2 - r);
+    open[path[k]] |= d[2]; open[path[k + 1]] |= d[3];
   }
-  const a = bfs(0).far;
-  const { far: b, prev } = bfs(a);
-  const path = [];
-  for (let cur = b; cur !== -1; cur = prev[cur]) path.push(cur);
-  path.reverse(); // Start a … Ziel b
-  if (rng() < 0.5) path.reverse();
-
   const pathIndex = new Int32Array(total).fill(-1);
   path.forEach((c, k) => { pathIndex[c] = k; });
 
@@ -468,7 +523,7 @@ function buildLevel(n, aspect = 1.43) {
   const difficulty = 0.25 + 0.75 * (n - 1) / (LEVEL_COUNT - 1);
   const holes = [];
   const waypoints = path.map((c) => ({ x: cellX(c) + cw / 2, y: cellY(c) + ch / 2 }));
-  const minOff = WALL_T / 2 + HOLE_R + HOLE_GAP;
+  const halfT = (frame) => (frame ? WALL_T / 2 : INNER_T / 2);   // halbe Leistenstärke ab Rasterlinie
   const candidates = shuffle(path.slice(2, -2).map((c) => pathIndex[c]), rng);
   const chosen = new Set(candidates.slice(0, holeTarget));
 
@@ -477,14 +532,17 @@ function buildLevel(n, aspect = 1.43) {
     const [ix, iy] = dirBetween(path[k - 1], c); // Richtung hinein
     const [ex, ey] = dirBetween(c, path[k + 1]); // Richtung hinaus
     const straight = ix === ex && iy === ey;
+    const [cc, rr] = cr(c);
     if (straight) {
       if (!chosen.has(k)) continue;
-      const side = rng() < 0.5 ? -1 : 1;
-      const P = ix !== 0 ? ch : cw, A = ix !== 0 ? cw : ch; // quer / längs zum Gang
-      const maxOff = Math.min(P - WALL_T / 2 - (2 * BALL_R + 16) - HOLE_R, P / 2);
-      const off = Math.min(maxOff, minOff + rng() * difficulty * 7);   // Spalt bleibt kleiner als die Kugel
+      const side = rng() < 0.5 ? -1 : 1, horiz = ix !== 0;
+      const P = horiz ? ch : cw, A = horiz ? cw : ch; // quer / längs zum Gang
+      const hn = halfT(horiz ? (side < 0 ? rr === 0 : rr === rows - 1) : (side < 0 ? cc === 0 : cc === cols - 1));
+      const hf = halfT(horiz ? (side < 0 ? rr === rows - 1 : rr === 0) : (side < 0 ? cc === cols - 1 : cc === 0));
+      const maxOff = Math.min(P - hf - (2 * BALL_R + 16) - HOLE_R, P / 2);
+      const off = Math.min(maxOff, hn + HOLE_R + HOLE_GAP + rng() * difficulty * 7);   // Spalt bleibt kleiner als die Kugel
       const along = (rng() - 0.5) * A * 0.25;
-      const gapMid = (off + HOLE_R + P - WALL_T / 2) / 2; // Mitte der freien Gasse
+      const gapMid = (off + HOLE_R + P - hf) / 2; // Mitte der freien Gasse
       if (ix !== 0) { // waagerechter Gang
         const hy = side < 0 ? y0 + off : y0 + ch - off;
         holes.push({ x: x0 + cw / 2 + along, y: hy, r: HOLE_R });
@@ -501,32 +559,21 @@ function buildLevel(n, aspect = 1.43) {
       waypoints[k].x += sx * cw * 0.12;
       waypoints[k].y += sy * ch * 0.12;
       if (!chosen.has(k)) continue;
-      const off = minOff + rng() * difficulty * 6;
+      const extra = rng() * difficulty * 6;
+      const offX = halfT(sx > 0 ? cc === 0 : cc === cols - 1) + HOLE_R + HOLE_GAP + extra;
+      const offY = halfT(sy > 0 ? rr === 0 : rr === rows - 1) + HOLE_R + HOLE_GAP + extra;
       // Loch in die Außenecke – dort, wo der Schwung hinträgt
-      const hx = sx > 0 ? x0 + off : x0 + cw - off;
-      const hy = sy > 0 ? y0 + off : y0 + ch - off;
+      const hx = sx > 0 ? x0 + offX : x0 + cw - offX;
+      const hy = sy > 0 ? y0 + offY : y0 + ch - offY;
       holes.push({ x: hx, y: hy, r: HOLE_R });
     }
   }
 
-  // --- Fallen in Sackgassen
-  if (n >= 3) {
-    const deadEnds = [];
-    for (let i = 0; i < total; i++) {
-      if (pathIndex[i] >= 0) continue;
-      let cnt = 0; for (const d of DIRS) if (open[i] & d[2]) cnt++;
-      if (cnt === 1) deadEnds.push(i);
-    }
-    shuffle(deadEnds, rng).slice(0, Math.floor(holeTarget / 3)).forEach((i) => {
-      holes.push({ x: cellX(i) + cw / 2, y: cellY(i) + ch / 2, r: HOLE_R });
-    });
-  }
-
   // --- Wände (zusammenhängende Stücke zusammengefasst)
   const walls = [];
-  const T = WALL_T;
   for (let r = 0; r <= rows; r++) {
     let run = -1;
+    const T = r === 0 || r === rows ? WALL_T : INNER_T;
     for (let c = 0; c <= cols; c++) {
       const closed = c < cols && (r === 0 || r === rows || !(open[id(c, r)] & N));
       if (closed && run < 0) run = c;
@@ -538,6 +585,7 @@ function buildLevel(n, aspect = 1.43) {
   }
   for (let c = 0; c <= cols; c++) {
     let run = -1;
+    const T = c === 0 || c === cols ? WALL_T : INNER_T;
     for (let r = 0; r <= rows; r++) {
       const closed = r < rows && (c === 0 || c === cols || !(open[id(c, r)] & Wd));
       if (closed && run < 0) run = r;
@@ -838,7 +886,7 @@ function floorTex(L) {
 function railTex() {
   if (!tex.rail) {
     // Kiefernleisten: hell mit kräftigen orangebraunen Spätholzstreifen
-    tex.rail = makeWood(2700, 30 * RAIL_PX, 1 / RAIL_PX,
+    tex.rail = makeWood(2700, 40 * RAIL_PX, 1 / RAIL_PX,
       { light: [236, 199, 140], dark: [182, 114, 52], seed: 29, ring: 6.5, warp: 5, ringAmt: 0.72 });
   }
   return tex.rail;
