@@ -90,10 +90,34 @@ function buildClassic(aspect) {
     walls.push({ x: x0, y: Y(v) - BT / 2, w: x1 - x0, h: BT });
   });
   const pathPts = C.line.slice(C.startIdx).map(([u, v]) => ({ x: X(u), y: Y(v) }));
+  const holes = C.holes.map(([u, v]) => ({ x: X(u), y: Y(v), r: CLASSIC_HOLE_R }));
+  // Handkorrekturen (Indizes in C.vbars / C.holes; Leisten stehen nach den 4 Rahmenleisten in walls)
+  const vb = (i) => walls[4 + i], R = CLASSIC_HOLE_R;
+  // Loch 4/5 samt linker Leiste nach rechts, bis rechts kein Durchkommen mehr ist; die Leiste bei 2 reicht dafür bis neben das Loch
+  {
+    const hole = holes[7], left = vb(7), right = vb(3), wall16 = vb(9);
+    right.h = hole.y + 6 - right.y;                                  // Leiste bei 2 bis auf Lochhöhe verlängern
+    const d = right.x - HOLE_GAP - R - hole.x;
+    hole.x += d; left.x += d;
+    // Leiste bei 16 nach oben bis an die Leiste bei 2: zwischen 4 und 17 gibt es keinen Durchschlupf mehr
+    wall16.h += wall16.y - (right.y + right.h); wall16.y = right.y + right.h;
+    wall16.x = right.x;                                              // bündig darunter, ohne Versatz
+    [hole, left, right, wall16].forEach((o) => { o.fixed = true; });
+  }
+  // Reihe 15/18 und 14/19 samt ihren zwei Leisten nach rechts, bis rechts von 14/19 kein Durchkommen mehr ist (an Leiste 24)
+  {
+    // von Leiste 24 aus dicht nach links gepackt: Loch 14/19 – Leiste – Loch 15/18 – Leiste, jeweils mit Spalt HOLE_GAP
+    const h18 = holes[9], h19 = holes[10], bL = vb(10), bM = vb(11), long = vb(13);
+    h19.x = long.x - HOLE_GAP - R;
+    bM.x = h19.x - R - HOLE_GAP - bM.w;
+    h18.x = bM.x - HOLE_GAP - R;
+    bL.x = h18.x - R - HOLE_GAP - bL.w;
+    [h18, h19, bL, bM, long].forEach((o) => { o.fixed = true; });
+  }
   return {
     n: CLASSIC_LEVEL, classic: true, W, H, aspect, cell: 120,
     ox: T / 2, oy: T / 2, mw: W - T, mh: H - T,
-    walls, holes: C.holes.map(([u, v]) => ({ x: X(u), y: Y(v), r: CLASSIC_HOLE_R })),
+    walls, holes,
     pathPts, tip: { x: X(C.tip[0]), y: Y(C.tip[1]) },
     labels: C.labels.map(([t, u, v]) => ({ text: t, x: X(u), y: Y(v), size: 22, weight: 600, angle: 0 })),
     startText: { text: 'START', x: X(C.startText[0]), y: Y(C.startText[1]), angle: 0 },
@@ -196,6 +220,7 @@ function finishLevel(L) {
   L.finish = { x: L.tip.x, y: L.tip.y };
   if (!L.waypoints) L.waypoints = resample(P, 28).concat([{ x: L.tip.x, y: L.tip.y }]);
   closeHoleGaps(L);
+  resolveWallOverlaps(L);
 
   const placed = [];
   const place = (cands, text, size, weight, spacing) => {
@@ -311,7 +336,7 @@ function closeHoleGaps(L) {
     .filter((o) => o.d > 1e-6 && o.g > 13 && o.g <= 2 * BALL_R + 14 && !lineThrough(h, o));   // ≤ 13: Kugel hängt über dem Loch und fällt
   const openAll = () => L.holes.reduce((n, o) => n + open(o).length, 0);
   const holeLimit = L.classic ? 50 : Infinity;
-  const holeMoveOps = (h, o) => { const m = o.g - HOLE_GAP; return m <= holeLimit ? [[h, 'x', h.x + o.ux * m], [h, 'y', h.y + o.uy * m]] : null; };
+  const holeMoveOps = (h, o) => { const m = o.g - HOLE_GAP; return m <= holeLimit && !h.fixed ? [[h, 'x', h.x + o.ux * m], [h, 'y', h.y + o.uy * m]] : null; };
   // nach einer Leistenänderung: Löcher, deren Spalt zu dieser Leiste dadurch aufgeht, gleich mit heranrücken
   const follow = (w, except) => {
     const ops = [];
@@ -323,7 +348,7 @@ function closeHoleGaps(L) {
     return ops;
   };
   const wallCands = (h, o) => {
-    const out = [], w = o.w; if (w.frame) return out;
+    const out = [], w = o.w; if (w.frame || w.fixed) return out;
     const before = lineDist(w);
     const tryOps = (mk, costF) => {
       for (let t = 1; t <= 80; t++) {
@@ -369,7 +394,7 @@ function closeHoleGaps(L) {
         }
         cands.push(...wallCands(h, o));
         // Loch zwischen zwei Leisten: beide Leisten heranrücken (Loch bleibt, wo es ist)
-        const near = L.walls.map((w) => gapTo(h, w)).filter((x) => x.d > 1e-6 && !x.w.frame && x.w !== o.w && x.g <= 2 * BALL_R + 14 && o.ux * x.ux + o.uy * x.uy < -0.7);
+        const near = L.walls.map((w) => gapTo(h, w)).filter((x) => x.d > 1e-6 && !x.w.frame && !x.w.fixed && x.w !== o.w && x.g <= 2 * BALL_R + 14 && o.ux * x.ux + o.uy * x.uy < -0.7);
         for (const o2 of near) for (const c1 of wallCands(h, o)) {
           const u1 = apply(c1.ops);
           const o2now = gapTo(h, o2.w);
@@ -439,6 +464,37 @@ function inFinish(L, x, y) {
   if (!Z) return false;
   const gx = Math.floor(x / Z.G), gy = Math.floor(y / Z.G);
   return gx >= 0 && gy >= 0 && gx < Z.gw && gy < Z.gh && Z.zone[gy * Z.gw + gx] === 1;
+}
+
+// Wo zwei Leisten aufeinanderstoßen, wird die kürzere an der längeren gekappt (Rahmen geht immer vor);
+// kreuzt eine Leiste eine andere, wird sie in zwei Stücke geteilt. Die Form der Wände bleibt dieselbe.
+function resolveWallOverlaps(L) {
+  for (let guard = 0; guard < 400; guard++) {
+    let done = true;
+    const ws = L.walls;
+    outer: for (let i = 0; i < ws.length; i++) for (let j = 0; j < ws.length; j++) {
+      if (i === j) continue;
+      const A = ws[i], B = ws[j];
+      const ix0 = Math.max(A.x, B.x), ix1 = Math.min(A.x + A.w, B.x + B.w), iy0 = Math.max(A.y, B.y), iy1 = Math.min(A.y + A.h, B.y + B.h);
+      if (ix1 - ix0 <= 0.01 || iy1 - iy0 <= 0.01) continue;
+      const lenA = Math.max(A.w, A.h), lenB = Math.max(B.w, B.h);
+      const aLoses = (B.frame && !A.frame) || (!!B.frame === !!A.frame && (lenA < lenB || (lenA === lenB && i > j)));
+      if (!aLoses) continue;
+      const vert = A.h >= A.w;
+      const full = vert ? ix0 <= A.x + 0.01 && ix1 >= A.x + A.w - 0.01 : iy0 <= A.y + 0.01 && iy1 >= A.y + A.h - 0.01;
+      if (!full) continue;
+      const pieces = [];
+      if (vert) {
+        if (iy0 - A.y > 0.5) pieces.push({ ...A, h: iy0 - A.y });
+        if (A.y + A.h - iy1 > 0.5) pieces.push({ ...A, y: iy1, h: A.y + A.h - iy1 });
+      } else {
+        if (ix0 - A.x > 0.5) pieces.push({ ...A, w: ix0 - A.x });
+        if (A.x + A.w - ix1 > 0.5) pieces.push({ ...A, x: ix1, w: A.x + A.w - ix1 });
+      }
+      ws.splice(i, 1, ...pieces); done = false; break outer;
+    }
+    if (done) return;
+  }
 }
 
 // Kommt die Kugel überhaupt vom Start ins Ziel?
